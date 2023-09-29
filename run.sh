@@ -1,0 +1,15 @@
+python train.py \
+--dataroot datasets/consolidated \
+--name M40 \
+--ncf 32 64 128 \
+--pool_res 1800 1600 1400 \
+--norm group \
+--resblocks 1 \
+--flip_edges 0.2 \
+--slide_verts 0.2 \
+--num_aug 20 \
+--niter_decay 100 \
+--ninput_edges 2000 \
+--batch_size  16 \
+--gpu_ids -1 \
+--run_test_freq 300 \

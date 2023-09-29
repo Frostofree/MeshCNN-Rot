@@ -1,6 +1,8 @@
 import numpy as np
 import os
 import ntpath
+import torch
+
 
 
 def fill_mesh(mesh2fill, file: str, opt):
@@ -53,6 +55,9 @@ def from_scratch(file, opt):
     mesh_data.edge_areas = []
     mesh_data.vs, faces = fill_from_file(mesh_data, file)
     mesh_data.v_mask = np.ones(len(mesh_data.vs), dtype=bool)
+
+
+    mesh_data.vs = rotate(mesh_data, file)
     faces, face_areas = remove_non_manifolds(mesh_data, faces)
     if opt.num_aug > 1:
         faces = augmentation(mesh_data, opt, faces)
@@ -61,6 +66,41 @@ def from_scratch(file, opt):
         post_augmentation(mesh_data, opt)
     mesh_data.features = extract_features(mesh_data)
     return mesh_data
+
+def rotate(mesh, file):
+    '''This is the Rotation augmentation step I have defined'''
+    vs = np.asarray(mesh.vs)
+
+    max_rotate_angle = 90
+    x = np.random.uniform(-max_rotate_angle, max_rotate_angle) * np.pi / 180
+    y = np.random.uniform(-max_rotate_angle, max_rotate_angle) * np.pi / 180
+    z = np.random.uniform(-max_rotate_angle, max_rotate_angle) * np.pi / 180
+    
+    A = np.array(
+    ((np.cos(x), -np.sin(x), 0), (np.sin(x), np.cos(x), 0), (0, 0, 1)),
+            dtype=vs.dtype,
+    )
+
+    B = np.array(
+        ((np.cos(y), 0, -np.sin(y)), (0, 1, 0), (np.sin(y), 0, np.cos(y))),
+        dtype=vs.dtype,
+    )
+
+    C = np.array(
+    ((1, 0, 0), (0, np.cos(z), -np.sin(z)), (0, np.sin(z), np.cos(z))),
+        dtype=vs.dtype,
+    )
+
+    np.dot(vs, A, out=vs)
+
+    np.dot(vs, B, out=vs)
+
+    np.dot(vs, C, out=vs)
+
+    vs = torch.from_numpy(vs).float()
+
+    return vs
+
 
 def fill_from_file(mesh, file):
     mesh.filename = ntpath.split(file)[1]
