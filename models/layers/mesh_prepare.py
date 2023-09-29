@@ -71,7 +71,7 @@ def rotate(mesh, file):
     '''This is the Rotation augmentation step I have defined'''
     vs = np.asarray(mesh.vs)
 
-    max_rotate_angle = 90
+    max_rotate_angle = 10
     x = np.random.uniform(-max_rotate_angle, max_rotate_angle) * np.pi / 180
     y = np.random.uniform(-max_rotate_angle, max_rotate_angle) * np.pi / 180
     z = np.random.uniform(-max_rotate_angle, max_rotate_angle) * np.pi / 180
@@ -97,7 +97,9 @@ def rotate(mesh, file):
 
     np.dot(vs, C, out=vs)
 
-    vs = torch.from_numpy(vs).float()
+    # print(vs.dtype)
+    # vs = torch.from_numpy(vs).float()
+
 
     return vs
 
