@@ -37,25 +37,33 @@ class ClassifierModel:
         if self.is_train:
             self.optimizer = torch.optim.Adam(self.net.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.scheduler = networks.get_scheduler(self.optimizer, opt)
+            # Parallelize the model
+            if len(self.gpu_ids) > 1:
+                self.net = torch.nn.DataParallel(self.net, self.gpu_ids)
             print_network(self.net)
 
         if not self.is_train or opt.continue_train:
             self.load_network(opt.which_epoch)
 
     def set_input(self, data):
-        input_edge_features = torch.from_numpy(data['edge_features']).float()
-        labels = torch.from_numpy(data['label']).long()
+        # input_edge_features = torch.from_numpy(data['edge_features']).float()
+        input_edge_features = torch.tensor(data['edge_features'], dtype=torch.float32)
+        # labels = torch.from_numpy(data['label']).long()
+        labels = torch.tensor(data['label'], dtype=torch.long)
         # set inputs
+        # print("labels:",data['label'])
+    
         self.edge_features = input_edge_features.to(self.device).requires_grad_(self.is_train)
         self.labels = labels.to(self.device)
         self.mesh = data['mesh']
         if self.opt.dataset_mode == 'segmentation' and not self.is_train:
-            self.soft_label = torch.from_numpy(data['soft_label'])
+            # self.soft_label = torch.from_numpy(data['soft_label'])
+            self.soft_label = torch.tensor(data['soft_label'], dtype=torch.float32).to(self.device)
 
 
     def forward(self):
-        out = self.net(self.edge_features, self.mesh)
-        return out
+        out , fc1 = self.net(self.edge_features, self.mesh)
+        return out , fc1
 
     def backward(self, out):
         self.loss = self.criterion(out, self.labels)
@@ -63,7 +71,7 @@ class ClassifierModel:
 
     def optimize_parameters(self):
         self.optimizer.zero_grad()
-        out = self.forward()
+        out , _ = self.forward()
         self.backward(out)
         self.optimizer.step()
 
@@ -107,13 +115,13 @@ class ClassifierModel:
         returns: number correct and total number
         """
         with torch.no_grad():
-            out = self.forward()
+            out,fc_1 = self.forward()
             # compute number of correct
             pred_class = out.data.max(1)[1]
             label_class = self.labels
             self.export_segmentation(pred_class.cpu())
             correct = self.get_accuracy(pred_class, label_class)
-        return correct, len(label_class)
+        return correct, len(label_class) , out , fc_1
 
     def get_accuracy(self, pred, labels):
         """computes accuracy for classification / segmentation """

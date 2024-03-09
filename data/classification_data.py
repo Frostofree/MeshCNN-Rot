@@ -3,6 +3,7 @@ import torch
 from data.base_dataset import BaseDataset
 from util.util import is_mesh_file, pad
 from models.layers.mesh import Mesh
+import numpy as np
 
 class ClassificationData(BaseDataset):
 
@@ -12,9 +13,13 @@ class ClassificationData(BaseDataset):
         self.device = torch.device('cuda:{}'.format(opt.gpu_ids[0])) if opt.gpu_ids else torch.device('cpu')
         self.root = opt.dataroot
         self.dir = os.path.join(opt.dataroot)
+        # print("Data directory: ", self.dir)
         self.classes, self.class_to_idx = self.find_classes(self.dir)
-        self.paths = self.make_dataset_by_class(self.dir, self.class_to_idx, opt.phase)
+        # print("Classes: ", self.classes)
+        self.paths = self.make_dataset_by_class(self.dir, self.class_to_idx, opt.phase,opt.fraction_of_data_per_class)
+        # print("Paths: ", self.paths)
         self.nclasses = len(self.classes)
+
         self.size = len(self.paths)
         self.get_mean_std()
         # modify for network later.
@@ -44,7 +49,7 @@ class ClassificationData(BaseDataset):
         return classes, class_to_idx
 
     @staticmethod
-    def make_dataset_by_class(dir, class_to_idx, phase):
+    def make_dataset_by_class(dir, class_to_idx, phase,fraction_of_data_per_class=1.0):
         meshes = []
         dir = os.path.expanduser(dir)
         for target in sorted(os.listdir(dir)):
@@ -53,8 +58,47 @@ class ClassificationData(BaseDataset):
                 continue
             for root, _, fnames in sorted(os.walk(d)):
                 for fname in sorted(fnames):
+                    # print(root.count)
                     if is_mesh_file(fname) and (root.count(phase)==1):
+                        if np.random.rand() > fraction_of_data_per_class:           # We skip this data point with probability 1 - fraction_of_data_per_class
+                            continue
+            
+                        # print(root)
                         path = os.path.join(root, fname)
+                        # print(path)
                         item = (path, class_to_idx[target])
+                        # print(item)
                         meshes.append(item)
+
+            # Replace using os.scandir
+
+            # with os.scandir(d) as it:
+            #     for entry in it:            # In class, now test,train
+            #         with os.scandir(entry) as itt:
+            #             for entry2 in itt:
+            #                 # print(entry2.path)
+            #                 # print(phase)
+            #                 if is_mesh_file(entry2.name) :           # d.count == 1 mean train
+            #                     print(entry2.path)
+            #                     if phase == "train" :
+            #                         # print(entry2.path)
+            #                         if np.random.rand() > fraction_of_data_per_class:
+            #                             continue
+
+
+                                    
+            #                         path = os.path.join(d,phase,entry2.name)
+            #                         # print("Path: ", path)
+            #                         item = (path, class_to_idx[target])
+            #                         # print(item)
+            #                         meshes.append(item)
+                                    
+                            # print("Meshes: ",len(meshes))
+                            
+
+
+            
+
+            # print(os.scandir(d))
+            
         return meshes

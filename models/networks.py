@@ -153,8 +153,10 @@ class MeshConvNet(nn.Module):
         x = x.view(-1, self.k[-1])
 
         x = F.relu(self.fc1(x))
+
+        fc1 = x.detach().clone()
         x = self.fc2(x)
-        return x
+        return x , fc1
 
 class MResConv(nn.Module):
     def __init__(self, in_channels, out_channels, skips=1):

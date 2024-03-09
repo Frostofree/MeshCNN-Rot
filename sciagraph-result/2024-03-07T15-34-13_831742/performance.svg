@@ -1,0 +1,495 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="852" onload="init(evt)" viewBox="0 0 1200 852" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:monospace; font-size:16px }
+#title { text-anchor:middle; font-size:21px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 16;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = true;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames, known_font_width;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    known_font_width = get_monospace_width(frames);
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+            svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            update_text_for_elements(frames.children);
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function get_monospace_width(frames) {
+    // Given the id="frames" element, return the width of text characters if
+    // this is a monospace font, otherwise return 0.
+    text = find_child(frames.children[0], "text");
+    originalContent = text.textContent;
+    text.textContent = "!";
+    bangWidth = text.getComputedTextLength();
+    text.textContent = "W";
+    wWidth = text.getComputedTextLength();
+    text.textContent = originalContent;
+    if (bangWidth === wWidth) {
+        return bangWidth;
+    } else {
+        return 0;
+    }
+}
+function update_text_for_elements(elements) {
+    // In order to render quickly in the browser, you want to do one pass of
+    // reading attributes, and one pass of mutating attributes. See
+    // https://web.dev/avoid-large-complex-layouts-and-layout-thrashing/ for details.
+
+    // Fall back to inefficient calculation, if we're variable-width font.
+    // TODO This should be optimized somehow too.
+    if (known_font_width === 0) {
+        for (var i = 0; i < elements.length; i++) {
+            update_text(elements[i]);
+        }
+        return;
+    }
+
+    var textElemNewAttributes = [];
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var r = find_child(e, "rect");
+        var t = find_child(e, "text");
+        var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+        var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+        var newX = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+        // Smaller than this size won't fit anything
+        if (w < 2 * known_font_width) {
+            textElemNewAttributes.push([newX, ""]);
+            continue;
+        }
+
+        // Fit in full text width
+        if (txt.length * known_font_width < w) {
+            textElemNewAttributes.push([newX, txt]);
+            continue;
+        }
+
+        var substringLength = Math.floor(w / known_font_width) - 2;
+        if (truncate_text_right) {
+            // Truncate the right side of the text.
+            textElemNewAttributes.push([newX, txt.substring(0, substringLength) + ".."]);
+            continue;
+        } else {
+            // Truncate the left side of the text.
+            textElemNewAttributes.push([newX, ".." + txt.substring(txt.length - substringLength, txt.length)]);
+            continue;
+        }
+    }
+
+    console.assert(textElemNewAttributes.length === elements.length, "Resize failed, please file a bug at https://github.com/jonhoo/inferno/");
+
+    // Now that we know new textContent, set it all in one go so we don't refresh a bazillion times.
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var values = textElemNewAttributes[i];
+        var t = find_child(e, "text");
+        t.attributes.x.value = values[0];
+        t.textContent = values[1];
+    }
+}
+
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    var to_update_text = [];
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                to_update_text.push(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                to_update_text.push(e);
+            }
+        }
+    }
+    update_text_for_elements(to_update_text);
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+    }
+    update_text_for_elements(el);
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="852" fill="url(#background)"/><text id="title" fill="rgb(0,0,0)" x="50.0000%" y="32.00">Runtime flamegraph</text><text id="subtitle" x="50.0000%" y="64.00">⟲ See the timeline for ordering and concurrency ⟲</text><text id="details" fill="rgb(0,0,0)" x="10" y="84.00"> </text><text id="unzoom" class="hide" fill="rgb(0,0,0)" x="10" y="32.00">Reset Zoom</text><text id="search" fill="rgb(0,0,0)" x="1190" y="32.00">Search</text><text id="matched" fill="rgb(0,0,0)" x="1190" y="839.00"> </text><svg id="frames" x="10" width="1180" total_samples="646934"><g class="waiting-frame"><title>? Other ? (3,144 samples, 0.49%)</title><rect x="0.1097%" y="562" width="0.4860%" height="21" fill="rgb(255,239,239)" fg:x="710" fg:w="3144"/><text x="0.3597%" y="575.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/genericpath.py:42 (isdir) (3,181 samples, 0.49%)</title><rect x="0.1097%" y="518" width="0.4917%" height="21" fill="rgb(255,239,239)" fg:x="710" fg:w="3181"/><text x="0.3597%" y="531.50"></text></g><g><title>        st = os.stat(s) (3,181 samples, 0.49%)</title><rect x="0.1097%" y="540" width="0.4917%" height="21" fill="rgb(255,239,239)" fg:x="710" fg:w="3181"/><text x="0.3597%" y="553.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:50 (get_mesh_path) (3,334 samples, 0.52%)</title><rect x="0.1097%" y="474" width="0.5154%" height="21" fill="rgb(255,239,239)" fg:x="710" fg:w="3334"/><text x="0.3597%" y="487.50"></text></g><g><title>    if not os.path.isdir(load_dir): (3,334 samples, 0.52%)</title><rect x="0.1097%" y="496" width="0.5154%" height="21" fill="rgb(255,239,239)" fg:x="710" fg:w="3334"/><text x="0.3597%" y="509.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:10 (fill_mesh) (3,938 samples, 0.61%)</title><rect x="0.0692%" y="430" width="0.6087%" height="21" fill="rgb(255,238,238)" fg:x="448" fg:w="3938"/><text x="0.3192%" y="443.50"></text></g><g><title>    load_path = get_mesh_path(file, opt.num_aug) (3,938 samples, 0.61%)</title><rect x="0.0692%" y="452" width="0.6087%" height="21" fill="rgb(255,238,238)" fg:x="448" fg:w="3938"/><text x="0.3192%" y="465.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:206 (fill_from_file) (1,620 samples, 0.25%)</title><rect x="1.0932%" y="518" width="0.2504%" height="21" fill="rgb(255,242,242)" fg:x="7072" fg:w="1620"/><text x="1.3432%" y="531.50"></text></g><g><title>    vs, faces = [], [] (1,620 samples, 0.25%)</title><rect x="1.0932%" y="540" width="0.2504%" height="21" fill="rgb(255,242,242)" fg:x="7072" fg:w="1620"/><text x="1.3432%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,620 samples, 0.25%)</title><rect x="1.0932%" y="562" width="0.2504%" height="21" fill="rgb(255,242,242)" fg:x="7072" fg:w="1620"/><text x="1.3432%" y="575.50"></text></g><g class="waiting-frame"><title>? Other ? (77,625 samples, 12.00%)</title><rect x="1.5459%" y="562" width="11.9989%" height="21" fill="rgb(255,198,198)" fg:x="10001" fg:w="77625"/><text x="1.7959%" y="575.50">? Other ?</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:208 (fill_from_file) (80,513 samples, 12.45%)</title><rect x="1.5331%" y="518" width="12.4453%" height="21" fill="rgb(255,197,197)" fg:x="9918" fg:w="80513"/><text x="1.7831%" y="531.50">/media/Data1/..</text></g><g><title>    for line in f: (80,513 samples, 12.45%)</title><rect x="1.5331%" y="540" width="12.4453%" height="21" fill="rgb(255,197,197)" fg:x="9918" fg:w="80513"/><text x="1.7831%" y="553.50">    for line..</text></g><g class="running-frame"><title>➤ CPU ➤ (2,805 samples, 0.43%)</title><rect x="13.5448%" y="562" width="0.4336%" height="21" fill="rgb(255,240,240)" fg:x="87626" fg:w="2805"/><text x="13.7948%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:214 (&lt;listcomp&gt;) (2,407 samples, 0.37%)</title><rect x="14.1682%" y="562" width="0.3721%" height="21" fill="rgb(255,240,240)" fg:x="91659" fg:w="2407"/><text x="14.4182%" y="575.50"></text></g><g><title>            vs.append([float(v) for v in splitted_line[1:4]]) (2,407 samples, 0.37%)</title><rect x="14.1682%" y="584" width="0.3721%" height="21" fill="rgb(255,240,240)" fg:x="91659" fg:w="2407"/><text x="14.4182%" y="597.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,666 samples, 0.26%)</title><rect x="14.2828%" y="606" width="0.2575%" height="21" fill="rgb(255,242,242)" fg:x="92400" fg:w="1666"/><text x="14.5328%" y="619.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:214 (fill_from_file) (3,526 samples, 0.55%)</title><rect x="14.1682%" y="518" width="0.5450%" height="21" fill="rgb(255,238,238)" fg:x="91659" fg:w="3526"/><text x="14.4182%" y="531.50"></text></g><g><title>            vs.append([float(v) for v in splitted_line[1:4]]) (3,526 samples, 0.55%)</title><rect x="14.1682%" y="540" width="0.5450%" height="21" fill="rgb(255,238,238)" fg:x="91659" fg:w="3526"/><text x="14.4182%" y="553.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:216 (&lt;listcomp&gt;) (9,241 samples, 1.43%)</title><rect x="14.7255%" y="562" width="1.4284%" height="21" fill="rgb(255,232,232)" fg:x="95264" fg:w="9241"/><text x="14.9755%" y="575.50"></text></g><g><title>            face_vertex_ids = [int(c.split(&apos;/&apos;)[0]) for c in splitted_line[1:]] (9,241 samples, 1.43%)</title><rect x="14.7255%" y="584" width="1.4284%" height="21" fill="rgb(255,232,232)" fg:x="95264" fg:w="9241"/><text x="14.9755%" y="597.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (9,241 samples, 1.43%)</title><rect x="14.7255%" y="606" width="1.4284%" height="21" fill="rgb(255,232,232)" fg:x="95264" fg:w="9241"/><text x="14.9755%" y="619.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:216 (fill_from_file) (11,102 samples, 1.72%)</title><rect x="14.7255%" y="518" width="1.7161%" height="21" fill="rgb(255,230,230)" fg:x="95264" fg:w="11102"/><text x="14.9755%" y="531.50"></text></g><g><title>            face_vertex_ids = [int(c.split(&apos;/&apos;)[0]) for c in splitted_line[1:]] (11,102 samples, 1.72%)</title><rect x="14.7255%" y="540" width="1.7161%" height="21" fill="rgb(255,230,230)" fg:x="95264" fg:w="11102"/><text x="14.9755%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,861 samples, 0.29%)</title><rect x="16.1539%" y="562" width="0.2877%" height="21" fill="rgb(255,241,241)" fg:x="104505" fg:w="1861"/><text x="16.4039%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:220 (&lt;listcomp&gt;) (2,107 samples, 0.33%)</title><rect x="16.4743%" y="562" width="0.3257%" height="21" fill="rgb(255,241,241)" fg:x="106578" fg:w="2107"/><text x="16.7243%" y="575.50"></text></g><g><title>                               for ind in face_vertex_ids] (2,107 samples, 0.33%)</title><rect x="16.4743%" y="584" width="0.3257%" height="21" fill="rgb(255,241,241)" fg:x="106578" fg:w="2107"/><text x="16.7243%" y="597.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (2,107 samples, 0.33%)</title><rect x="16.4743%" y="606" width="0.3257%" height="21" fill="rgb(255,241,241)" fg:x="106578" fg:w="2107"/><text x="16.7243%" y="619.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:220 (fill_from_file) (2,950 samples, 0.46%)</title><rect x="16.4728%" y="518" width="0.4560%" height="21" fill="rgb(255,239,239)" fg:x="106568" fg:w="2950"/><text x="16.7228%" y="531.50"></text></g><g><title>                               for ind in face_vertex_ids] (2,950 samples, 0.46%)</title><rect x="16.4728%" y="540" width="0.4560%" height="21" fill="rgb(255,239,239)" fg:x="106568" fg:w="2950"/><text x="16.7228%" y="553.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/numpy/core/numeric.py:501 (asarray) (2,559 samples, 0.40%)</title><rect x="17.1367%" y="562" width="0.3956%" height="21" fill="rgb(255,240,240)" fg:x="110863" fg:w="2559"/><text x="17.3867%" y="575.50"></text></g><g><title>    return array(a, dtype, copy=False, order=order) (2,559 samples, 0.40%)</title><rect x="17.1367%" y="584" width="0.3956%" height="21" fill="rgb(255,240,240)" fg:x="110863" fg:w="2559"/><text x="17.3867%" y="597.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (2,559 samples, 0.40%)</title><rect x="17.1367%" y="606" width="0.3956%" height="21" fill="rgb(255,240,240)" fg:x="110863" fg:w="2559"/><text x="17.3867%" y="619.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:224 (fill_from_file) (2,689 samples, 0.42%)</title><rect x="17.1367%" y="518" width="0.4157%" height="21" fill="rgb(255,240,240)" fg:x="110863" fg:w="2689"/><text x="17.3867%" y="531.50"></text></g><g><title>    faces = np.asarray(faces, dtype=int) (2,689 samples, 0.42%)</title><rect x="17.1367%" y="540" width="0.4157%" height="21" fill="rgb(255,240,240)" fg:x="110863" fg:w="2689"/><text x="17.3867%" y="553.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:69 (from_scratch) (109,126 samples, 16.87%)</title><rect x="0.7447%" y="474" width="16.8682%" height="21" fill="rgb(255,188,188)" fg:x="4818" fg:w="109126"/><text x="0.9947%" y="487.50">/media/Data1/siddha..</text></g><g><title>    mesh_data.vs, faces = fill_from_file(mesh_data, file) (109,126 samples, 16.87%)</title><rect x="0.7447%" y="496" width="16.8682%" height="21" fill="rgb(255,188,188)" fg:x="4818" fg:w="109126"/><text x="0.9947%" y="509.50">    mesh_data.vs, ..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:235 (remove_non_manifolds) (2,361 samples, 0.36%)</title><rect x="17.7131%" y="518" width="0.3650%" height="21" fill="rgb(255,241,241)" fg:x="114592" fg:w="2361"/><text x="17.9631%" y="531.50"></text></g><g><title>    _, face_areas = compute_face_normals_and_areas(mesh, faces) (2,361 samples, 0.36%)</title><rect x="17.7131%" y="540" width="0.3650%" height="21" fill="rgb(255,241,241)" fg:x="114592" fg:w="2361"/><text x="17.9631%" y="553.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:237 (remove_non_manifolds) (2,404 samples, 0.37%)</title><rect x="18.2722%" y="518" width="0.3716%" height="21" fill="rgb(255,240,240)" fg:x="118209" fg:w="2404"/><text x="18.5222%" y="531.50"></text></g><g><title>        if face_areas[face_id] == 0: (2,404 samples, 0.37%)</title><rect x="18.2722%" y="540" width="0.3716%" height="21" fill="rgb(255,240,240)" fg:x="118209" fg:w="2404"/><text x="18.5222%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (2,404 samples, 0.37%)</title><rect x="18.2722%" y="562" width="0.3716%" height="21" fill="rgb(255,240,240)" fg:x="118209" fg:w="2404"/><text x="18.5222%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:242 (remove_non_manifolds) (1,880 samples, 0.29%)</title><rect x="18.6761%" y="518" width="0.2906%" height="21" fill="rgb(255,241,241)" fg:x="120822" fg:w="1880"/><text x="18.9261%" y="531.50"></text></g><g><title>        for i in range(3): (1,880 samples, 0.29%)</title><rect x="18.6761%" y="540" width="0.2906%" height="21" fill="rgb(255,241,241)" fg:x="120822" fg:w="1880"/><text x="18.9261%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,880 samples, 0.29%)</title><rect x="18.6761%" y="562" width="0.2906%" height="21" fill="rgb(255,241,241)" fg:x="120822" fg:w="1880"/><text x="18.9261%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:243 (remove_non_manifolds) (3,998 samples, 0.62%)</title><rect x="18.9667%" y="518" width="0.6180%" height="21" fill="rgb(255,238,238)" fg:x="122702" fg:w="3998"/><text x="19.2167%" y="531.50"></text></g><g><title>            cur_edge = (face[i], face[(i + 1) % 3]) (3,998 samples, 0.62%)</title><rect x="18.9667%" y="540" width="0.6180%" height="21" fill="rgb(255,238,238)" fg:x="122702" fg:w="3998"/><text x="19.2167%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,998 samples, 0.62%)</title><rect x="18.9667%" y="562" width="0.6180%" height="21" fill="rgb(255,238,238)" fg:x="122702" fg:w="3998"/><text x="19.2167%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:252 (remove_non_manifolds) (2,272 samples, 0.35%)</title><rect x="19.9150%" y="518" width="0.3512%" height="21" fill="rgb(255,241,241)" fg:x="128837" fg:w="2272"/><text x="20.1650%" y="531.50"></text></g><g><title>            for idx, edge in enumerate(faces_edges): (2,272 samples, 0.35%)</title><rect x="19.9150%" y="540" width="0.3512%" height="21" fill="rgb(255,241,241)" fg:x="128837" fg:w="2272"/><text x="20.1650%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (2,272 samples, 0.35%)</title><rect x="19.9150%" y="562" width="0.3512%" height="21" fill="rgb(255,241,241)" fg:x="128837" fg:w="2272"/><text x="20.1650%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:253 (remove_non_manifolds) (1,967 samples, 0.30%)</title><rect x="20.2662%" y="518" width="0.3040%" height="21" fill="rgb(255,241,241)" fg:x="131109" fg:w="1967"/><text x="20.5162%" y="531.50"></text></g><g><title>                edges_set.add(edge) (1,967 samples, 0.30%)</title><rect x="20.2662%" y="540" width="0.3040%" height="21" fill="rgb(255,241,241)" fg:x="131109" fg:w="1967"/><text x="20.5162%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,967 samples, 0.30%)</title><rect x="20.2662%" y="562" width="0.3040%" height="21" fill="rgb(255,241,241)" fg:x="131109" fg:w="1967"/><text x="20.5162%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:80 (from_scratch) (20,411 samples, 3.16%)</title><rect x="17.6284%" y="474" width="3.1550%" height="21" fill="rgb(255,223,223)" fg:x="114044" fg:w="20411"/><text x="17.8784%" y="487.50">/m..</text></g><g><title>    faces, face_areas = remove_non_manifolds(mesh_data, faces) (20,411 samples, 3.16%)</title><rect x="17.6284%" y="496" width="3.1550%" height="21" fill="rgb(255,223,223)" fg:x="114044" fg:w="20411"/><text x="17.8784%" y="509.50"> ..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:272 (build_gemm) (1,527 samples, 0.24%)</title><rect x="20.8670%" y="518" width="0.2360%" height="21" fill="rgb(255,242,242)" fg:x="134996" fg:w="1527"/><text x="21.1170%" y="531.50"></text></g><g><title>    for face_id, face in enumerate(faces): (1,527 samples, 0.24%)</title><rect x="20.8670%" y="540" width="0.2360%" height="21" fill="rgb(255,242,242)" fg:x="134996" fg:w="1527"/><text x="21.1170%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,527 samples, 0.24%)</title><rect x="20.8670%" y="562" width="0.2360%" height="21" fill="rgb(255,242,242)" fg:x="134996" fg:w="1527"/><text x="21.1170%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:274 (build_gemm) (2,130 samples, 0.33%)</title><rect x="21.1886%" y="518" width="0.3292%" height="21" fill="rgb(255,241,241)" fg:x="137076" fg:w="2130"/><text x="21.4386%" y="531.50"></text></g><g><title>        for i in range(3): (2,130 samples, 0.33%)</title><rect x="21.1886%" y="540" width="0.3292%" height="21" fill="rgb(255,241,241)" fg:x="137076" fg:w="2130"/><text x="21.4386%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (2,130 samples, 0.33%)</title><rect x="21.1886%" y="562" width="0.3292%" height="21" fill="rgb(255,241,241)" fg:x="137076" fg:w="2130"/><text x="21.4386%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:275 (build_gemm) (4,457 samples, 0.69%)</title><rect x="21.5178%" y="518" width="0.6889%" height="21" fill="rgb(255,237,237)" fg:x="139206" fg:w="4457"/><text x="21.7678%" y="531.50"></text></g><g><title>            cur_edge = (face[i], face[(i + 1) % 3]) (4,457 samples, 0.69%)</title><rect x="21.5178%" y="540" width="0.6889%" height="21" fill="rgb(255,237,237)" fg:x="139206" fg:w="4457"/><text x="21.7678%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (4,457 samples, 0.69%)</title><rect x="21.5178%" y="562" width="0.6889%" height="21" fill="rgb(255,237,237)" fg:x="139206" fg:w="4457"/><text x="21.7678%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:277 (build_gemm) (3,395 samples, 0.52%)</title><rect x="22.3837%" y="518" width="0.5248%" height="21" fill="rgb(255,239,239)" fg:x="144808" fg:w="3395"/><text x="22.6337%" y="531.50"></text></g><g><title>        for idx, edge in enumerate(faces_edges): (3,395 samples, 0.52%)</title><rect x="22.3837%" y="540" width="0.5248%" height="21" fill="rgb(255,239,239)" fg:x="144808" fg:w="3395"/><text x="22.6337%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,395 samples, 0.52%)</title><rect x="22.3837%" y="562" width="0.5248%" height="21" fill="rgb(255,239,239)" fg:x="144808" fg:w="3395"/><text x="22.6337%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:278 (build_gemm) (30,604 samples, 4.73%)</title><rect x="22.9085%" y="518" width="4.7306%" height="21" fill="rgb(255,217,217)" fg:x="148203" fg:w="30604"/><text x="23.1585%" y="531.50">/med..</text></g><g><title>            edge = tuple(sorted(list(edge))) (30,604 samples, 4.73%)</title><rect x="22.9085%" y="540" width="4.7306%" height="21" fill="rgb(255,217,217)" fg:x="148203" fg:w="30604"/><text x="23.1585%" y="553.50">   ..</text></g><g class="running-frame"><title>➤ CPU ➤ (30,604 samples, 4.73%)</title><rect x="22.9085%" y="562" width="4.7306%" height="21" fill="rgb(255,217,217)" fg:x="148203" fg:w="30604"/><text x="23.1585%" y="575.50">➤ CP..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:280 (build_gemm) (2,579 samples, 0.40%)</title><rect x="27.7257%" y="518" width="0.3986%" height="21" fill="rgb(255,240,240)" fg:x="179367" fg:w="2579"/><text x="27.9757%" y="531.50"></text></g><g><title>            if edge not in edge2key: (2,579 samples, 0.40%)</title><rect x="27.7257%" y="540" width="0.3986%" height="21" fill="rgb(255,240,240)" fg:x="179367" fg:w="2579"/><text x="27.9757%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (2,579 samples, 0.40%)</title><rect x="27.7257%" y="562" width="0.3986%" height="21" fill="rgb(255,240,240)" fg:x="179367" fg:w="2579"/><text x="27.9757%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:282 (build_gemm) (10,505 samples, 1.62%)</title><rect x="28.2978%" y="518" width="1.6238%" height="21" fill="rgb(255,230,230)" fg:x="183068" fg:w="10505"/><text x="28.5478%" y="531.50"></text></g><g><title>                edges.append(list(edge)) (10,505 samples, 1.62%)</title><rect x="28.2978%" y="540" width="1.6238%" height="21" fill="rgb(255,230,230)" fg:x="183068" fg:w="10505"/><text x="28.5478%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (10,505 samples, 1.62%)</title><rect x="28.2978%" y="562" width="1.6238%" height="21" fill="rgb(255,230,230)" fg:x="183068" fg:w="10505"/><text x="28.5478%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:290 (build_gemm) (15,237 samples, 2.36%)</title><rect x="30.7592%" y="518" width="2.3553%" height="21" fill="rgb(255,227,227)" fg:x="198992" fg:w="15237"/><text x="31.0092%" y="531.50"></text></g><g><title>            mesh.edge_areas[edge2key[edge]] += face_areas[face_id] / 3 (15,237 samples, 2.36%)</title><rect x="30.7592%" y="540" width="2.3553%" height="21" fill="rgb(255,227,227)" fg:x="198992" fg:w="15237"/><text x="31.0092%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (15,237 samples, 2.36%)</title><rect x="30.7592%" y="562" width="2.3553%" height="21" fill="rgb(255,227,227)" fg:x="198992" fg:w="15237"/><text x="31.0092%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:291 (build_gemm) (2,164 samples, 0.33%)</title><rect x="33.1145%" y="518" width="0.3345%" height="21" fill="rgb(255,241,241)" fg:x="214229" fg:w="2164"/><text x="33.3645%" y="531.50"></text></g><g><title>        for idx, edge in enumerate(faces_edges): (2,164 samples, 0.33%)</title><rect x="33.1145%" y="540" width="0.3345%" height="21" fill="rgb(255,241,241)" fg:x="214229" fg:w="2164"/><text x="33.3645%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (2,164 samples, 0.33%)</title><rect x="33.1145%" y="562" width="0.3345%" height="21" fill="rgb(255,241,241)" fg:x="214229" fg:w="2164"/><text x="33.3645%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:292 (build_gemm) (2,584 samples, 0.40%)</title><rect x="33.4490%" y="518" width="0.3994%" height="21" fill="rgb(255,240,240)" fg:x="216393" fg:w="2584"/><text x="33.6990%" y="531.50"></text></g><g><title>            edge_key = edge2key[edge] (2,584 samples, 0.40%)</title><rect x="33.4490%" y="540" width="0.3994%" height="21" fill="rgb(255,240,240)" fg:x="216393" fg:w="2584"/><text x="33.6990%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (2,584 samples, 0.40%)</title><rect x="33.4490%" y="562" width="0.3994%" height="21" fill="rgb(255,240,240)" fg:x="216393" fg:w="2584"/><text x="33.6990%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:293 (build_gemm) (4,778 samples, 0.74%)</title><rect x="33.8484%" y="518" width="0.7386%" height="21" fill="rgb(255,237,237)" fg:x="218977" fg:w="4778"/><text x="34.0984%" y="531.50"></text></g><g><title>            edge_nb[edge_key][nb_count[edge_key]] = edge2key[faces_edges[(idx + 1) % 3]] (4,778 samples, 0.74%)</title><rect x="33.8484%" y="540" width="0.7386%" height="21" fill="rgb(255,237,237)" fg:x="218977" fg:w="4778"/><text x="34.0984%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (4,778 samples, 0.74%)</title><rect x="33.8484%" y="562" width="0.7386%" height="21" fill="rgb(255,237,237)" fg:x="218977" fg:w="4778"/><text x="34.0984%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:294 (build_gemm) (4,598 samples, 0.71%)</title><rect x="34.5870%" y="518" width="0.7107%" height="21" fill="rgb(255,237,237)" fg:x="223755" fg:w="4598"/><text x="34.8370%" y="531.50"></text></g><g><title>            edge_nb[edge_key][nb_count[edge_key] + 1] = edge2key[faces_edges[(idx + 2) % 3]] (4,598 samples, 0.71%)</title><rect x="34.5870%" y="540" width="0.7107%" height="21" fill="rgb(255,237,237)" fg:x="223755" fg:w="4598"/><text x="34.8370%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (4,598 samples, 0.71%)</title><rect x="34.5870%" y="562" width="0.7107%" height="21" fill="rgb(255,237,237)" fg:x="223755" fg:w="4598"/><text x="34.8370%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:295 (build_gemm) (1,374 samples, 0.21%)</title><rect x="35.2977%" y="518" width="0.2124%" height="21" fill="rgb(255,243,243)" fg:x="228353" fg:w="1374"/><text x="35.5477%" y="531.50"></text></g><g><title>            nb_count[edge_key] += 2 (1,374 samples, 0.21%)</title><rect x="35.2977%" y="540" width="0.2124%" height="21" fill="rgb(255,243,243)" fg:x="228353" fg:w="1374"/><text x="35.5477%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,374 samples, 0.21%)</title><rect x="35.2977%" y="562" width="0.2124%" height="21" fill="rgb(255,243,243)" fg:x="228353" fg:w="1374"/><text x="35.5477%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:296 (build_gemm) (1,964 samples, 0.30%)</title><rect x="35.5101%" y="518" width="0.3036%" height="21" fill="rgb(255,241,241)" fg:x="229727" fg:w="1964"/><text x="35.7601%" y="531.50"></text></g><g><title>        for idx, edge in enumerate(faces_edges): (1,964 samples, 0.30%)</title><rect x="35.5101%" y="540" width="0.3036%" height="21" fill="rgb(255,241,241)" fg:x="229727" fg:w="1964"/><text x="35.7601%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,964 samples, 0.30%)</title><rect x="35.5101%" y="562" width="0.3036%" height="21" fill="rgb(255,241,241)" fg:x="229727" fg:w="1964"/><text x="35.7601%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:297 (build_gemm) (2,232 samples, 0.35%)</title><rect x="35.8137%" y="518" width="0.3450%" height="21" fill="rgb(255,241,241)" fg:x="231691" fg:w="2232"/><text x="36.0637%" y="531.50"></text></g><g><title>            edge_key = edge2key[edge] (2,232 samples, 0.35%)</title><rect x="35.8137%" y="540" width="0.3450%" height="21" fill="rgb(255,241,241)" fg:x="231691" fg:w="2232"/><text x="36.0637%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (2,232 samples, 0.35%)</title><rect x="35.8137%" y="562" width="0.3450%" height="21" fill="rgb(255,241,241)" fg:x="231691" fg:w="2232"/><text x="36.0637%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:298 (build_gemm) (5,244 samples, 0.81%)</title><rect x="36.1587%" y="518" width="0.8106%" height="21" fill="rgb(255,236,236)" fg:x="233923" fg:w="5244"/><text x="36.4087%" y="531.50"></text></g><g><title>            sides[edge_key][nb_count[edge_key] - 2] = nb_count[edge2key[faces_edges[(idx + 1) % 3]]] - 1 (5,244 samples, 0.81%)</title><rect x="36.1587%" y="540" width="0.8106%" height="21" fill="rgb(255,236,236)" fg:x="233923" fg:w="5244"/><text x="36.4087%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (5,244 samples, 0.81%)</title><rect x="36.1587%" y="562" width="0.8106%" height="21" fill="rgb(255,236,236)" fg:x="233923" fg:w="5244"/><text x="36.4087%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:299 (build_gemm) (5,132 samples, 0.79%)</title><rect x="36.9693%" y="518" width="0.7933%" height="21" fill="rgb(255,236,236)" fg:x="239167" fg:w="5132"/><text x="37.2193%" y="531.50"></text></g><g><title>            sides[edge_key][nb_count[edge_key] - 1] = nb_count[edge2key[faces_edges[(idx + 2) % 3]]] - 2 (5,132 samples, 0.79%)</title><rect x="36.9693%" y="540" width="0.7933%" height="21" fill="rgb(255,236,236)" fg:x="239167" fg:w="5132"/><text x="37.2193%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (5,132 samples, 0.79%)</title><rect x="36.9693%" y="562" width="0.7933%" height="21" fill="rgb(255,236,236)" fg:x="239167" fg:w="5132"/><text x="37.2193%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:302 (build_gemm) (3,722 samples, 0.58%)</title><rect x="37.7746%" y="518" width="0.5753%" height="21" fill="rgb(255,238,238)" fg:x="244377" fg:w="3722"/><text x="38.0246%" y="531.50"></text></g><g><title>    mesh.edges = np.array(edges, dtype=np.int32) (3,722 samples, 0.58%)</title><rect x="37.7746%" y="540" width="0.5753%" height="21" fill="rgb(255,238,238)" fg:x="244377" fg:w="3722"/><text x="38.0246%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,722 samples, 0.58%)</title><rect x="37.7746%" y="562" width="0.5753%" height="21" fill="rgb(255,238,238)" fg:x="244377" fg:w="3722"/><text x="38.0246%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:303 (build_gemm) (4,851 samples, 0.75%)</title><rect x="38.3500%" y="518" width="0.7498%" height="21" fill="rgb(255,237,237)" fg:x="248099" fg:w="4851"/><text x="38.6000%" y="531.50"></text></g><g><title>    mesh.gemm_edges = np.array(edge_nb, dtype=np.int64) (4,851 samples, 0.75%)</title><rect x="38.3500%" y="540" width="0.7498%" height="21" fill="rgb(255,237,237)" fg:x="248099" fg:w="4851"/><text x="38.6000%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (4,851 samples, 0.75%)</title><rect x="38.3500%" y="562" width="0.7498%" height="21" fill="rgb(255,237,237)" fg:x="248099" fg:w="4851"/><text x="38.6000%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:304 (build_gemm) (4,876 samples, 0.75%)</title><rect x="39.0998%" y="518" width="0.7537%" height="21" fill="rgb(255,237,237)" fg:x="252950" fg:w="4876"/><text x="39.3498%" y="531.50"></text></g><g><title>    mesh.sides = np.array(sides, dtype=np.int64) (4,876 samples, 0.75%)</title><rect x="39.0998%" y="540" width="0.7537%" height="21" fill="rgb(255,237,237)" fg:x="252950" fg:w="4876"/><text x="39.3498%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (4,876 samples, 0.75%)</title><rect x="39.0998%" y="562" width="0.7537%" height="21" fill="rgb(255,237,237)" fg:x="252950" fg:w="4876"/><text x="39.3498%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:306 (build_gemm) (1,570 samples, 0.24%)</title><rect x="39.8535%" y="518" width="0.2427%" height="21" fill="rgb(255,242,242)" fg:x="257826" fg:w="1570"/><text x="40.1035%" y="531.50"></text></g><g><title>    mesh.edge_areas = np.array(mesh.edge_areas, dtype=np.float32) / np.sum(face_areas) #todo whats the difference between edge_areas and edge_lenghts? (1,570 samples, 0.24%)</title><rect x="39.8535%" y="540" width="0.2427%" height="21" fill="rgb(255,242,242)" fg:x="257826" fg:w="1570"/><text x="40.1035%" y="553.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,404 samples, 0.22%)</title><rect x="39.8792%" y="562" width="0.2170%" height="21" fill="rgb(255,243,243)" fg:x="257992" fg:w="1404"/><text x="40.1292%" y="575.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:85 (from_scratch) (126,363 samples, 19.53%)</title><rect x="20.7834%" y="474" width="19.5326%" height="21" fill="rgb(255,183,183)" fg:x="134455" fg:w="126363"/><text x="21.0334%" y="487.50">/media/Data1/siddharth..</text></g><g><title>    build_gemm(mesh_data, faces, face_areas) (126,363 samples, 19.53%)</title><rect x="20.7834%" y="496" width="19.5326%" height="21" fill="rgb(255,183,183)" fg:x="134455" fg:w="126363"/><text x="21.0334%" y="509.50">    build_gemm(mesh_d..</text></g><g class="running-frame"><title>➤ CPU ➤ (1,422 samples, 0.22%)</title><rect x="40.0962%" y="518" width="0.2198%" height="21" fill="rgb(255,243,243)" fg:x="259396" fg:w="1422"/><text x="40.3462%" y="531.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:517 (get_side_points) (1,397 samples, 0.22%)</title><rect x="40.5003%" y="606" width="0.2159%" height="21" fill="rgb(255,243,243)" fg:x="262010" fg:w="1397"/><text x="40.7503%" y="619.50"></text></g><g><title>    edge_a = mesh.edges[edge_id] (1,397 samples, 0.22%)</title><rect x="40.5003%" y="628" width="0.2159%" height="21" fill="rgb(255,243,243)" fg:x="262010" fg:w="1397"/><text x="40.7503%" y="641.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,397 samples, 0.22%)</title><rect x="40.5003%" y="650" width="0.2159%" height="21" fill="rgb(255,243,243)" fg:x="262010" fg:w="1397"/><text x="40.7503%" y="663.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:519 (get_side_points) (4,909 samples, 0.76%)</title><rect x="40.7162%" y="606" width="0.7588%" height="21" fill="rgb(255,236,236)" fg:x="263407" fg:w="4909"/><text x="40.9662%" y="619.50"></text></g><g><title>    if mesh.gemm_edges[edge_id, 0] == -1: (4,909 samples, 0.76%)</title><rect x="40.7162%" y="628" width="0.7588%" height="21" fill="rgb(255,236,236)" fg:x="263407" fg:w="4909"/><text x="40.9662%" y="641.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (4,909 samples, 0.76%)</title><rect x="40.7162%" y="650" width="0.7588%" height="21" fill="rgb(255,236,236)" fg:x="263407" fg:w="4909"/><text x="40.9662%" y="663.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:521 (get_side_points) (1,828 samples, 0.28%)</title><rect x="41.4750%" y="606" width="0.2826%" height="21" fill="rgb(255,242,242)" fg:x="268316" fg:w="1828"/><text x="41.7250%" y="619.50"></text></g><g><title>        edge_c = mesh.edges[mesh.gemm_edges[edge_id, 3]] (1,828 samples, 0.28%)</title><rect x="41.4750%" y="628" width="0.2826%" height="21" fill="rgb(255,242,242)" fg:x="268316" fg:w="1828"/><text x="41.7250%" y="641.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,828 samples, 0.28%)</title><rect x="41.4750%" y="650" width="0.2826%" height="21" fill="rgb(255,242,242)" fg:x="268316" fg:w="1828"/><text x="41.7250%" y="663.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:523 (get_side_points) (3,726 samples, 0.58%)</title><rect x="41.7576%" y="606" width="0.5759%" height="21" fill="rgb(255,238,238)" fg:x="270144" fg:w="3726"/><text x="42.0076%" y="619.50"></text></g><g><title>        edge_b = mesh.edges[mesh.gemm_edges[edge_id, 0]] (3,726 samples, 0.58%)</title><rect x="41.7576%" y="628" width="0.5759%" height="21" fill="rgb(255,238,238)" fg:x="270144" fg:w="3726"/><text x="42.0076%" y="641.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,726 samples, 0.58%)</title><rect x="41.7576%" y="650" width="0.5759%" height="21" fill="rgb(255,238,238)" fg:x="270144" fg:w="3726"/><text x="42.0076%" y="663.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:524 (get_side_points) (3,285 samples, 0.51%)</title><rect x="42.3335%" y="606" width="0.5078%" height="21" fill="rgb(255,239,239)" fg:x="273870" fg:w="3285"/><text x="42.5835%" y="619.50"></text></g><g><title>        edge_c = mesh.edges[mesh.gemm_edges[edge_id, 1]] (3,285 samples, 0.51%)</title><rect x="42.3335%" y="628" width="0.5078%" height="21" fill="rgb(255,239,239)" fg:x="273870" fg:w="3285"/><text x="42.5835%" y="641.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,285 samples, 0.51%)</title><rect x="42.3335%" y="650" width="0.5078%" height="21" fill="rgb(255,239,239)" fg:x="273870" fg:w="3285"/><text x="42.5835%" y="663.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:525 (get_side_points) (3,386 samples, 0.52%)</title><rect x="42.8413%" y="606" width="0.5234%" height="21" fill="rgb(255,239,239)" fg:x="277155" fg:w="3386"/><text x="43.0913%" y="619.50"></text></g><g><title>    if mesh.gemm_edges[edge_id, 2] == -1: (3,386 samples, 0.52%)</title><rect x="42.8413%" y="628" width="0.5234%" height="21" fill="rgb(255,239,239)" fg:x="277155" fg:w="3386"/><text x="43.0913%" y="641.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,386 samples, 0.52%)</title><rect x="42.8413%" y="650" width="0.5234%" height="21" fill="rgb(255,239,239)" fg:x="277155" fg:w="3386"/><text x="43.0913%" y="663.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:529 (get_side_points) (3,350 samples, 0.52%)</title><rect x="43.3647%" y="606" width="0.5178%" height="21" fill="rgb(255,239,239)" fg:x="280541" fg:w="3350"/><text x="43.6147%" y="619.50"></text></g><g><title>        edge_d = mesh.edges[mesh.gemm_edges[edge_id, 2]] (3,350 samples, 0.52%)</title><rect x="43.3647%" y="628" width="0.5178%" height="21" fill="rgb(255,239,239)" fg:x="280541" fg:w="3350"/><text x="43.6147%" y="641.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,350 samples, 0.52%)</title><rect x="43.3647%" y="650" width="0.5178%" height="21" fill="rgb(255,239,239)" fg:x="280541" fg:w="3350"/><text x="43.6147%" y="663.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:530 (get_side_points) (3,138 samples, 0.49%)</title><rect x="43.8825%" y="606" width="0.4851%" height="21" fill="rgb(255,239,239)" fg:x="283891" fg:w="3138"/><text x="44.1325%" y="619.50"></text></g><g><title>        edge_e = mesh.edges[mesh.gemm_edges[edge_id, 3]] (3,138 samples, 0.49%)</title><rect x="43.8825%" y="628" width="0.4851%" height="21" fill="rgb(255,239,239)" fg:x="283891" fg:w="3138"/><text x="44.1325%" y="641.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,138 samples, 0.49%)</title><rect x="43.8825%" y="650" width="0.4851%" height="21" fill="rgb(255,239,239)" fg:x="283891" fg:w="3138"/><text x="44.1325%" y="663.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:534 (get_side_points) (21,156 samples, 3.27%)</title><rect x="44.4041%" y="606" width="3.2702%" height="21" fill="rgb(255,222,222)" fg:x="287265" fg:w="21156"/><text x="44.6541%" y="619.50">/m..</text></g><g><title>    if edge_a[1] in edge_b: (21,156 samples, 3.27%)</title><rect x="44.4041%" y="628" width="3.2702%" height="21" fill="rgb(255,222,222)" fg:x="287265" fg:w="21156"/><text x="44.6541%" y="641.50"> ..</text></g><g class="running-frame"><title>➤ CPU ➤ (21,156 samples, 3.27%)</title><rect x="44.4041%" y="650" width="3.2702%" height="21" fill="rgb(255,222,222)" fg:x="287265" fg:w="21156"/><text x="44.6541%" y="663.50">➤ ..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:536 (get_side_points) (34,165 samples, 5.28%)</title><rect x="47.6800%" y="606" width="5.2811%" height="21" fill="rgb(255,215,215)" fg:x="308458" fg:w="34165"/><text x="47.9300%" y="619.50">/med..</text></g><g><title>    if edge_b[1] in edge_c: (34,165 samples, 5.28%)</title><rect x="47.6800%" y="628" width="5.2811%" height="21" fill="rgb(255,215,215)" fg:x="308458" fg:w="34165"/><text x="47.9300%" y="641.50">   ..</text></g><g class="running-frame"><title>➤ CPU ➤ (34,165 samples, 5.28%)</title><rect x="47.6800%" y="650" width="5.2811%" height="21" fill="rgb(255,215,215)" fg:x="308458" fg:w="34165"/><text x="47.9300%" y="663.50">➤ CP..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:538 (get_side_points) (35,868 samples, 5.54%)</title><rect x="52.9692%" y="606" width="5.5443%" height="21" fill="rgb(255,214,214)" fg:x="342676" fg:w="35868"/><text x="53.2192%" y="619.50">/medi..</text></g><g><title>    if edge_d[1] in edge_e: (35,868 samples, 5.54%)</title><rect x="52.9692%" y="628" width="5.5443%" height="21" fill="rgb(255,214,214)" fg:x="342676" fg:w="35868"/><text x="53.2192%" y="641.50">    ..</text></g><g class="running-frame"><title>➤ CPU ➤ (35,868 samples, 5.54%)</title><rect x="52.9692%" y="650" width="5.5443%" height="21" fill="rgb(255,214,214)" fg:x="342676" fg:w="35868"/><text x="53.2192%" y="663.50">➤ CPU..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:540 (get_side_points) (22,501 samples, 3.48%)</title><rect x="58.5188%" y="606" width="3.4781%" height="21" fill="rgb(255,222,222)" fg:x="378578" fg:w="22501"/><text x="58.7688%" y="619.50">/m..</text></g><g><title>    return [edge_a[first_vertex], edge_a[1 - first_vertex], edge_b[second_vertex], edge_d[third_vertex]] (22,501 samples, 3.48%)</title><rect x="58.5188%" y="628" width="3.4781%" height="21" fill="rgb(255,222,222)" fg:x="378578" fg:w="22501"/><text x="58.7688%" y="641.50"> ..</text></g><g class="running-frame"><title>➤ CPU ➤ (22,501 samples, 3.48%)</title><rect x="58.5188%" y="650" width="3.4781%" height="21" fill="rgb(255,222,222)" fg:x="378578" fg:w="22501"/><text x="58.7688%" y="663.50">➤ ..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:508 (get_edge_points) (154,292 samples, 23.85%)</title><rect x="40.3211%" y="562" width="23.8497%" height="21" fill="rgb(255,176,176)" fg:x="260851" fg:w="154292"/><text x="40.5711%" y="575.50">/media/Data1/siddharth/MCNN-..</text></g><g><title>        edge_points[edge_id] = get_side_points(mesh, edge_id) (154,292 samples, 23.85%)</title><rect x="40.3211%" y="584" width="23.8497%" height="21" fill="rgb(255,176,176)" fg:x="260851" fg:w="154292"/><text x="40.5711%" y="597.50">        edge_points[edge_id..</text></g><g class="running-frame"><title>➤ CPU ➤ (14,064 samples, 2.17%)</title><rect x="61.9969%" y="606" width="2.1739%" height="21" fill="rgb(255,227,227)" fg:x="401079" fg:w="14064"/><text x="62.2469%" y="619.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:510 (get_edge_points) (3,909 samples, 0.60%)</title><rect x="64.1708%" y="562" width="0.6042%" height="21" fill="rgb(255,238,238)" fg:x="415143" fg:w="3909"/><text x="64.4208%" y="575.50"></text></g><g><title>    return edge_points (3,909 samples, 0.60%)</title><rect x="64.1708%" y="584" width="0.6042%" height="21" fill="rgb(255,238,238)" fg:x="415143" fg:w="3909"/><text x="64.4208%" y="597.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,909 samples, 0.60%)</title><rect x="64.1708%" y="606" width="0.6042%" height="21" fill="rgb(255,238,238)" fg:x="415143" fg:w="3909"/><text x="64.4208%" y="619.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:457 (extract_features) (158,246 samples, 24.46%)</title><rect x="40.3160%" y="518" width="24.4609%" height="21" fill="rgb(255,175,175)" fg:x="260818" fg:w="158246"/><text x="40.5660%" y="531.50">/media/Data1/siddharth/MCNN-R..</text></g><g><title>    edge_points = get_edge_points(mesh) (158,246 samples, 24.46%)</title><rect x="40.3160%" y="540" width="24.4609%" height="21" fill="rgb(255,175,175)" fg:x="260818" fg:w="158246"/><text x="40.5660%" y="553.50">    edge_points = get_edge_p..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:519 (get_side_points) (4,964 samples, 0.77%)</title><rect x="65.1484%" y="650" width="0.7673%" height="21" fill="rgb(255,236,236)" fg:x="421467" fg:w="4964"/><text x="65.3984%" y="663.50"></text></g><g><title>    if mesh.gemm_edges[edge_id, 0] == -1: (4,964 samples, 0.77%)</title><rect x="65.1484%" y="672" width="0.7673%" height="21" fill="rgb(255,236,236)" fg:x="421467" fg:w="4964"/><text x="65.3984%" y="685.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (4,964 samples, 0.77%)</title><rect x="65.1484%" y="694" width="0.7673%" height="21" fill="rgb(255,236,236)" fg:x="421467" fg:w="4964"/><text x="65.3984%" y="707.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:521 (get_side_points) (2,023 samples, 0.31%)</title><rect x="65.9157%" y="650" width="0.3127%" height="21" fill="rgb(255,241,241)" fg:x="426431" fg:w="2023"/><text x="66.1657%" y="663.50"></text></g><g><title>        edge_c = mesh.edges[mesh.gemm_edges[edge_id, 3]] (2,023 samples, 0.31%)</title><rect x="65.9157%" y="672" width="0.3127%" height="21" fill="rgb(255,241,241)" fg:x="426431" fg:w="2023"/><text x="66.1657%" y="685.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (2,023 samples, 0.31%)</title><rect x="65.9157%" y="694" width="0.3127%" height="21" fill="rgb(255,241,241)" fg:x="426431" fg:w="2023"/><text x="66.1657%" y="707.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:523 (get_side_points) (3,712 samples, 0.57%)</title><rect x="66.2284%" y="650" width="0.5738%" height="21" fill="rgb(255,238,238)" fg:x="428454" fg:w="3712"/><text x="66.4784%" y="663.50"></text></g><g><title>        edge_b = mesh.edges[mesh.gemm_edges[edge_id, 0]] (3,712 samples, 0.57%)</title><rect x="66.2284%" y="672" width="0.5738%" height="21" fill="rgb(255,238,238)" fg:x="428454" fg:w="3712"/><text x="66.4784%" y="685.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,712 samples, 0.57%)</title><rect x="66.2284%" y="694" width="0.5738%" height="21" fill="rgb(255,238,238)" fg:x="428454" fg:w="3712"/><text x="66.4784%" y="707.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:524 (get_side_points) (3,210 samples, 0.50%)</title><rect x="66.8022%" y="650" width="0.4962%" height="21" fill="rgb(255,239,239)" fg:x="432166" fg:w="3210"/><text x="67.0522%" y="663.50"></text></g><g><title>        edge_c = mesh.edges[mesh.gemm_edges[edge_id, 1]] (3,210 samples, 0.50%)</title><rect x="66.8022%" y="672" width="0.4962%" height="21" fill="rgb(255,239,239)" fg:x="432166" fg:w="3210"/><text x="67.0522%" y="685.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,210 samples, 0.50%)</title><rect x="66.8022%" y="694" width="0.4962%" height="21" fill="rgb(255,239,239)" fg:x="432166" fg:w="3210"/><text x="67.0522%" y="707.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:525 (get_side_points) (3,340 samples, 0.52%)</title><rect x="67.2984%" y="650" width="0.5163%" height="21" fill="rgb(255,239,239)" fg:x="435376" fg:w="3340"/><text x="67.5484%" y="663.50"></text></g><g><title>    if mesh.gemm_edges[edge_id, 2] == -1: (3,340 samples, 0.52%)</title><rect x="67.2984%" y="672" width="0.5163%" height="21" fill="rgb(255,239,239)" fg:x="435376" fg:w="3340"/><text x="67.5484%" y="685.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,340 samples, 0.52%)</title><rect x="67.2984%" y="694" width="0.5163%" height="21" fill="rgb(255,239,239)" fg:x="435376" fg:w="3340"/><text x="67.5484%" y="707.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:529 (get_side_points) (3,291 samples, 0.51%)</title><rect x="67.8146%" y="650" width="0.5087%" height="21" fill="rgb(255,239,239)" fg:x="438716" fg:w="3291"/><text x="68.0646%" y="663.50"></text></g><g><title>        edge_d = mesh.edges[mesh.gemm_edges[edge_id, 2]] (3,291 samples, 0.51%)</title><rect x="67.8146%" y="672" width="0.5087%" height="21" fill="rgb(255,239,239)" fg:x="438716" fg:w="3291"/><text x="68.0646%" y="685.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,291 samples, 0.51%)</title><rect x="67.8146%" y="694" width="0.5087%" height="21" fill="rgb(255,239,239)" fg:x="438716" fg:w="3291"/><text x="68.0646%" y="707.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:530 (get_side_points) (3,112 samples, 0.48%)</title><rect x="68.3234%" y="650" width="0.4810%" height="21" fill="rgb(255,239,239)" fg:x="442007" fg:w="3112"/><text x="68.5734%" y="663.50"></text></g><g><title>        edge_e = mesh.edges[mesh.gemm_edges[edge_id, 3]] (3,112 samples, 0.48%)</title><rect x="68.3234%" y="672" width="0.4810%" height="21" fill="rgb(255,239,239)" fg:x="442007" fg:w="3112"/><text x="68.5734%" y="685.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,112 samples, 0.48%)</title><rect x="68.3234%" y="694" width="0.4810%" height="21" fill="rgb(255,239,239)" fg:x="442007" fg:w="3112"/><text x="68.5734%" y="707.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:534 (get_side_points) (20,839 samples, 3.22%)</title><rect x="68.8438%" y="650" width="3.2212%" height="21" fill="rgb(255,223,223)" fg:x="445374" fg:w="20839"/><text x="69.0938%" y="663.50">/m..</text></g><g><title>    if edge_a[1] in edge_b: (20,839 samples, 3.22%)</title><rect x="68.8438%" y="672" width="3.2212%" height="21" fill="rgb(255,223,223)" fg:x="445374" fg:w="20839"/><text x="69.0938%" y="685.50"> ..</text></g><g class="running-frame"><title>➤ CPU ➤ (20,839 samples, 3.22%)</title><rect x="68.8438%" y="694" width="3.2212%" height="21" fill="rgb(255,223,223)" fg:x="445374" fg:w="20839"/><text x="69.0938%" y="707.50">➤ ..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:536 (get_side_points) (33,494 samples, 5.18%)</title><rect x="72.0692%" y="650" width="5.1773%" height="21" fill="rgb(255,215,215)" fg:x="466240" fg:w="33494"/><text x="72.3192%" y="663.50">/med..</text></g><g><title>    if edge_b[1] in edge_c: (33,494 samples, 5.18%)</title><rect x="72.0692%" y="672" width="5.1773%" height="21" fill="rgb(255,215,215)" fg:x="466240" fg:w="33494"/><text x="72.3192%" y="685.50">   ..</text></g><g class="running-frame"><title>➤ CPU ➤ (33,494 samples, 5.18%)</title><rect x="72.0692%" y="694" width="5.1773%" height="21" fill="rgb(255,215,215)" fg:x="466240" fg:w="33494"/><text x="72.3192%" y="707.50">➤ CP..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:538 (get_side_points) (36,086 samples, 5.58%)</title><rect x="77.2513%" y="650" width="5.5780%" height="21" fill="rgb(255,214,214)" fg:x="499765" fg:w="36086"/><text x="77.5013%" y="663.50">/medi..</text></g><g><title>    if edge_d[1] in edge_e: (36,086 samples, 5.58%)</title><rect x="77.2513%" y="672" width="5.5780%" height="21" fill="rgb(255,214,214)" fg:x="499765" fg:w="36086"/><text x="77.5013%" y="685.50">    ..</text></g><g class="running-frame"><title>➤ CPU ➤ (36,086 samples, 5.58%)</title><rect x="77.2513%" y="694" width="5.5780%" height="21" fill="rgb(255,214,214)" fg:x="499765" fg:w="36086"/><text x="77.5013%" y="707.50">➤ CPU..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:540 (get_side_points) (22,441 samples, 3.47%)</title><rect x="82.8319%" y="650" width="3.4688%" height="21" fill="rgb(255,222,222)" fg:x="535868" fg:w="22441"/><text x="83.0819%" y="663.50">/m..</text></g><g><title>    return [edge_a[first_vertex], edge_a[1 - first_vertex], edge_b[second_vertex], edge_d[third_vertex]] (22,441 samples, 3.47%)</title><rect x="82.8319%" y="672" width="3.4688%" height="21" fill="rgb(255,222,222)" fg:x="535868" fg:w="22441"/><text x="83.0819%" y="685.50"> ..</text></g><g class="running-frame"><title>➤ CPU ➤ (22,441 samples, 3.47%)</title><rect x="82.8319%" y="694" width="3.4688%" height="21" fill="rgb(255,222,222)" fg:x="535868" fg:w="22441"/><text x="83.0819%" y="707.50">➤ ..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:508 (get_edge_points) (155,657 samples, 24.06%)</title><rect x="64.7769%" y="606" width="24.0607%" height="21" fill="rgb(255,176,176)" fg:x="419064" fg:w="155657"/><text x="65.0269%" y="619.50">/media/Data1/siddharth/MCNN-..</text></g><g><title>        edge_points[edge_id] = get_side_points(mesh, edge_id) (155,657 samples, 24.06%)</title><rect x="64.7769%" y="628" width="24.0607%" height="21" fill="rgb(255,176,176)" fg:x="419064" fg:w="155657"/><text x="65.0269%" y="641.50">        edge_points[edge_id..</text></g><g class="running-frame"><title>➤ CPU ➤ (16,412 samples, 2.54%)</title><rect x="86.3008%" y="650" width="2.5369%" height="21" fill="rgb(255,226,226)" fg:x="558309" fg:w="16412"/><text x="86.5508%" y="663.50">➤..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:450 (set_edge_lengths) (157,062 samples, 24.28%)</title><rect x="64.7769%" y="562" width="24.2779%" height="21" fill="rgb(255,176,176)" fg:x="419064" fg:w="157062"/><text x="65.0269%" y="575.50">/media/Data1/siddharth/MCNN-..</text></g><g><title>        edge_points = get_edge_points(mesh) (157,062 samples, 24.28%)</title><rect x="64.7769%" y="584" width="24.2779%" height="21" fill="rgb(255,176,176)" fg:x="419064" fg:w="157062"/><text x="65.0269%" y="597.50">        edge_points = get_e..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:510 (get_edge_points) (1,405 samples, 0.22%)</title><rect x="88.8377%" y="606" width="0.2172%" height="21" fill="rgb(255,243,243)" fg:x="574721" fg:w="1405"/><text x="89.0877%" y="619.50"></text></g><g><title>    return edge_points (1,405 samples, 0.22%)</title><rect x="88.8377%" y="628" width="0.2172%" height="21" fill="rgb(255,243,243)" fg:x="574721" fg:w="1405"/><text x="89.0877%" y="641.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (1,405 samples, 0.22%)</title><rect x="88.8377%" y="650" width="0.2172%" height="21" fill="rgb(255,243,243)" fg:x="574721" fg:w="1405"/><text x="89.0877%" y="663.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:458 (extract_features) (158,363 samples, 24.48%)</title><rect x="64.7769%" y="518" width="24.4790%" height="21" fill="rgb(255,175,175)" fg:x="419064" fg:w="158363"/><text x="65.0269%" y="531.50">/media/Data1/siddharth/MCNN-R..</text></g><g><title>    set_edge_lengths(mesh, edge_points) (158,363 samples, 24.48%)</title><rect x="64.7769%" y="540" width="24.4790%" height="21" fill="rgb(255,175,175)" fg:x="419064" fg:w="158363"/><text x="65.0269%" y="553.50">    set_edge_lengths(mesh, e..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:471 (dihedral_angle) (2,752 samples, 0.43%)</title><rect x="89.2790%" y="562" width="0.4254%" height="21" fill="rgb(255,240,240)" fg:x="577576" fg:w="2752"/><text x="89.5290%" y="575.50"></text></g><g><title>    normals_a = get_normals(mesh, edge_points, 0) (2,752 samples, 0.43%)</title><rect x="89.2790%" y="584" width="0.4254%" height="21" fill="rgb(255,240,240)" fg:x="577576" fg:w="2752"/><text x="89.5290%" y="597.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:472 (dihedral_angle) (2,384 samples, 0.37%)</title><rect x="89.7044%" y="562" width="0.3685%" height="21" fill="rgb(255,240,240)" fg:x="580328" fg:w="2384"/><text x="89.9544%" y="575.50"></text></g><g><title>    normals_b = get_normals(mesh, edge_points, 3) (2,384 samples, 0.37%)</title><rect x="89.7044%" y="584" width="0.3685%" height="21" fill="rgb(255,240,240)" fg:x="580328" fg:w="2384"/><text x="89.9544%" y="597.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:483 (symmetric_opposite_angles) (3,111 samples, 0.48%)</title><rect x="90.1913%" y="562" width="0.4809%" height="21" fill="rgb(255,239,239)" fg:x="583478" fg:w="3111"/><text x="90.4413%" y="575.50"></text></g><g><title>    angles_a = get_opposite_angles(mesh, edge_points, 0) (3,111 samples, 0.48%)</title><rect x="90.1913%" y="584" width="0.4809%" height="21" fill="rgb(255,239,239)" fg:x="583478" fg:w="3111"/><text x="90.4413%" y="597.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:484 (symmetric_opposite_angles) (3,109 samples, 0.48%)</title><rect x="90.6722%" y="562" width="0.4806%" height="21" fill="rgb(255,239,239)" fg:x="586589" fg:w="3109"/><text x="90.9222%" y="575.50"></text></g><g><title>    angles_b = get_opposite_angles(mesh, edge_points, 3) (3,109 samples, 0.48%)</title><rect x="90.6722%" y="584" width="0.4806%" height="21" fill="rgb(255,239,239)" fg:x="586589" fg:w="3109"/><text x="90.9222%" y="597.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:495 (symmetric_ratios) (3,826 samples, 0.59%)</title><rect x="91.2313%" y="562" width="0.5914%" height="21" fill="rgb(255,238,238)" fg:x="590206" fg:w="3826"/><text x="91.4813%" y="575.50"></text></g><g><title>    ratios_a = get_ratios(mesh, edge_points, 0) (3,826 samples, 0.59%)</title><rect x="91.2313%" y="584" width="0.5914%" height="21" fill="rgb(255,238,238)" fg:x="590206" fg:w="3826"/><text x="91.4813%" y="597.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:496 (symmetric_ratios) (3,813 samples, 0.59%)</title><rect x="91.8227%" y="562" width="0.5894%" height="21" fill="rgb(255,238,238)" fg:x="594032" fg:w="3813"/><text x="92.0727%" y="575.50"></text></g><g><title>    ratios_b = get_ratios(mesh, edge_points, 3) (3,813 samples, 0.59%)</title><rect x="91.8227%" y="584" width="0.5894%" height="21" fill="rgb(255,238,238)" fg:x="594032" fg:w="3813"/><text x="92.0727%" y="597.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:462 (extract_features) (20,793 samples, 3.21%)</title><rect x="89.2790%" y="518" width="3.2141%" height="21" fill="rgb(255,223,223)" fg:x="577576" fg:w="20793"/><text x="89.5290%" y="531.50">/m..</text></g><g><title>                feature = extractor(mesh, edge_points) (20,793 samples, 3.21%)</title><rect x="89.2790%" y="540" width="3.2141%" height="21" fill="rgb(255,223,223)" fg:x="577576" fg:w="20793"/><text x="89.5290%" y="553.50"> ..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:88 (from_scratch) (337,834 samples, 52.22%)</title><rect x="40.3160%" y="474" width="52.2208%" height="21" fill="rgb(255,141,141)" fg:x="260818" fg:w="337834"/><text x="40.5660%" y="487.50">/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:88..</text></g><g><title>    mesh_data.features = extract_features(mesh_data) (337,834 samples, 52.22%)</title><rect x="40.3160%" y="496" width="52.2208%" height="21" fill="rgb(255,141,141)" fg:x="260818" fg:w="337834"/><text x="40.5660%" y="509.50">    mesh_data.features = extract_features(mesh_data)..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:14 (fill_mesh) (594,006 samples, 91.82%)</title><rect x="0.7214%" y="430" width="91.8186%" height="21" fill="rgb(255,106,106)" fg:x="4667" fg:w="594006"/><text x="0.9714%" y="443.50">/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:14 (fill_mesh)</text></g><g><title>        mesh_data = from_scratch(file, opt) (594,006 samples, 91.82%)</title><rect x="0.7214%" y="452" width="91.8186%" height="21" fill="rgb(255,106,106)" fg:x="4667" fg:w="594006"/><text x="0.9714%" y="465.50">        mesh_data = from_scratch(file, opt)</text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/numpy/lib/npyio.py:701 (_savez) (1,302 samples, 0.20%)</title><rect x="92.7442%" y="518" width="0.2013%" height="21" fill="rgb(255,243,243)" fg:x="599994" fg:w="1302"/><text x="92.9942%" y="531.50"></text></g><g><title>            val = np.asanyarray(val) (1,302 samples, 0.20%)</title><rect x="92.7442%" y="540" width="0.2013%" height="21" fill="rgb(255,243,243)" fg:x="599994" fg:w="1302"/><text x="92.9942%" y="553.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/zipfile.py:1506 (open) (2,010 samples, 0.31%)</title><rect x="93.0146%" y="562" width="0.3107%" height="21" fill="rgb(255,241,241)" fg:x="601743" fg:w="2010"/><text x="93.2646%" y="575.50"></text></g><g><title>            return self._open_to_write(zinfo, force_zip64=force_zip64) (2,010 samples, 0.31%)</title><rect x="93.0146%" y="584" width="0.3107%" height="21" fill="rgb(255,241,241)" fg:x="601743" fg:w="2010"/><text x="93.2646%" y="597.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/numpy/lib/npyio.py:703 (_savez) (2,864 samples, 0.44%)</title><rect x="92.9455%" y="518" width="0.4427%" height="21" fill="rgb(255,240,240)" fg:x="601296" fg:w="2864"/><text x="93.1955%" y="531.50"></text></g><g><title>            with zipf.open(fname, &apos;w&apos;, force_zip64=force_zip64) as fid: (2,864 samples, 0.44%)</title><rect x="92.9455%" y="540" width="0.4427%" height="21" fill="rgb(255,240,240)" fg:x="601296" fg:w="2864"/><text x="93.1955%" y="553.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/re.py:236 (compile) (2,621 samples, 0.41%)</title><rect x="93.8462%" y="782" width="0.4051%" height="21" fill="rgb(255,240,240)" fg:x="607123" fg:w="2621"/><text x="94.0962%" y="795.50"></text></g><g><title>    return _compile(pattern, flags) (2,621 samples, 0.41%)</title><rect x="93.8462%" y="804" width="0.4051%" height="21" fill="rgb(255,240,240)" fg:x="607123" fg:w="2621"/><text x="94.0962%" y="817.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/tokenize.py:148 (_compile) (3,349 samples, 0.52%)</title><rect x="93.8462%" y="738" width="0.5177%" height="21" fill="rgb(255,239,239)" fg:x="607123" fg:w="3349"/><text x="94.0962%" y="751.50"></text></g><g><title>    return re.compile(expr, re.UNICODE) (3,349 samples, 0.52%)</title><rect x="93.8462%" y="760" width="0.5177%" height="21" fill="rgb(255,239,239)" fg:x="607123" fg:w="3349"/><text x="94.0962%" y="773.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/tokenize.py:583 (_tokenize) (7,310 samples, 1.13%)</title><rect x="93.8462%" y="694" width="1.1299%" height="21" fill="rgb(255,234,234)" fg:x="607123" fg:w="7310"/><text x="94.0962%" y="707.50"></text></g><g><title>            pseudomatch = _compile(PseudoToken).match(line, pos) (7,310 samples, 1.13%)</title><rect x="93.8462%" y="716" width="1.1299%" height="21" fill="rgb(255,234,234)" fg:x="607123" fg:w="7310"/><text x="94.0962%" y="729.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,961 samples, 0.61%)</title><rect x="94.3639%" y="738" width="0.6123%" height="21" fill="rgb(255,238,238)" fg:x="610472" fg:w="3961"/><text x="94.6139%" y="751.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/numpy/lib/format.py:466 (_filter_header) (13,813 samples, 2.14%)</title><rect x="93.5905%" y="650" width="2.1351%" height="21" fill="rgb(255,228,228)" fg:x="605469" fg:w="13813"/><text x="93.8405%" y="663.50"></text></g><g><title>    for token in tokenize.generate_tokens(StringIO(string).readline): (13,813 samples, 2.14%)</title><rect x="93.5905%" y="672" width="2.1351%" height="21" fill="rgb(255,228,228)" fg:x="605469" fg:w="13813"/><text x="93.8405%" y="685.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/tokenize.py:333 (untokenize) (3,043 samples, 0.47%)</title><rect x="95.7359%" y="694" width="0.4704%" height="21" fill="rgb(255,239,239)" fg:x="619348" fg:w="3043"/><text x="95.9859%" y="707.50"></text></g><g><title>    out = ut.untokenize(iterable) (3,043 samples, 0.47%)</title><rect x="95.7359%" y="716" width="0.4704%" height="21" fill="rgb(255,239,239)" fg:x="619348" fg:w="3043"/><text x="95.9859%" y="729.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/numpy/lib/format.py:477 (_filter_header) (3,711 samples, 0.57%)</title><rect x="95.7257%" y="650" width="0.5736%" height="21" fill="rgb(255,238,238)" fg:x="619282" fg:w="3711"/><text x="95.9757%" y="663.50"></text></g><g><title>    return tokenize.untokenize(tokens)[:-1] (3,711 samples, 0.57%)</title><rect x="95.7257%" y="672" width="0.5736%" height="21" fill="rgb(255,238,238)" fg:x="619282" fg:w="3711"/><text x="95.9757%" y="685.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/numpy/lib/format.py:315 (_write_array_header) (18,997 samples, 2.94%)</title><rect x="93.4843%" y="606" width="2.9365%" height="21" fill="rgb(255,224,224)" fg:x="604782" fg:w="18997"/><text x="93.7343%" y="619.50">/..</text></g><g><title>    header = asbytes(_filter_header(header)) (18,997 samples, 2.94%)</title><rect x="93.4843%" y="628" width="2.9365%" height="21" fill="rgb(255,224,224)" fg:x="604782" fg:w="18997"/><text x="93.7343%" y="641.50">..</text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/numpy/lib/format.py:572 (write_array) (20,647 samples, 3.19%)</title><rect x="93.4635%" y="562" width="3.1915%" height="21" fill="rgb(255,223,223)" fg:x="604647" fg:w="20647"/><text x="93.7135%" y="575.50">/h..</text></g><g><title>                                   version) (20,647 samples, 3.19%)</title><rect x="93.4635%" y="584" width="3.1915%" height="21" fill="rgb(255,223,223)" fg:x="604647" fg:w="20647"/><text x="93.7135%" y="597.50"> ..</text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/numpy/lib/format.py:593 (write_array) (1,638 samples, 0.25%)</title><rect x="96.6757%" y="562" width="0.2532%" height="21" fill="rgb(255,242,242)" fg:x="625428" fg:w="1638"/><text x="96.9257%" y="575.50"></text></g><g><title>        pickle.dump(array, fp, protocol=2, **pickle_kwargs) (1,638 samples, 0.25%)</title><rect x="96.6757%" y="584" width="0.2532%" height="21" fill="rgb(255,242,242)" fg:x="625428" fg:w="1638"/><text x="96.9257%" y="597.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/zipfile.py:1131 (write) (3,733 samples, 0.58%)</title><rect x="97.0363%" y="606" width="0.5770%" height="21" fill="rgb(255,238,238)" fg:x="627761" fg:w="3733"/><text x="97.2863%" y="619.50"></text></g><g><title>        self._fileobj.write(data) (3,733 samples, 0.58%)</title><rect x="97.0363%" y="628" width="0.5770%" height="21" fill="rgb(255,238,238)" fg:x="627761" fg:w="3733"/><text x="97.2863%" y="641.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (3,367 samples, 0.52%)</title><rect x="97.0929%" y="650" width="0.5205%" height="21" fill="rgb(255,239,239)" fg:x="628127" fg:w="3367"/><text x="97.3429%" y="663.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/numpy/lib/format.py:609 (write_array) (5,695 samples, 0.88%)</title><rect x="97.0002%" y="562" width="0.8803%" height="21" fill="rgb(255,235,235)" fg:x="627527" fg:w="5695"/><text x="97.2502%" y="575.50"></text></g><g><title>                fp.write(chunk.tobytes(&apos;C&apos;)) (5,695 samples, 0.88%)</title><rect x="97.0002%" y="584" width="0.8803%" height="21" fill="rgb(255,235,235)" fg:x="627527" fg:w="5695"/><text x="97.2502%" y="597.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/zipfile.py:1171 (close) (1,564 samples, 0.24%)</title><rect x="98.0197%" y="562" width="0.2418%" height="21" fill="rgb(255,242,242)" fg:x="634123" fg:w="1564"/><text x="98.2697%" y="575.50"></text></g><g><title>                self._fileobj.write(self._zinfo.FileHeader(self._zip64)) (1,564 samples, 0.24%)</title><rect x="98.0197%" y="584" width="0.2418%" height="21" fill="rgb(255,242,242)" fg:x="634123" fg:w="1564"/><text x="98.2697%" y="597.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/numpy/lib/npyio.py:706 (_savez) (32,786 samples, 5.07%)</title><rect x="93.3882%" y="518" width="5.0679%" height="21" fill="rgb(255,216,216)" fg:x="604160" fg:w="32786"/><text x="93.6382%" y="531.50">/hom..</text></g><g><title>                                   pickle_kwargs=pickle_kwargs) (32,786 samples, 5.07%)</title><rect x="93.3882%" y="540" width="5.0679%" height="21" fill="rgb(255,216,216)" fg:x="604160" fg:w="32786"/><text x="93.6382%" y="553.50">   ..</text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/numpy/lib/npyio.py:603 (savez) (38,787 samples, 6.00%)</title><rect x="92.5400%" y="474" width="5.9955%" height="21" fill="rgb(255,213,213)" fg:x="598673" fg:w="38787"/><text x="92.7900%" y="487.50">/home..</text></g><g><title>    _savez(file, args, kwds, False) (38,787 samples, 6.00%)</title><rect x="92.5400%" y="496" width="5.9955%" height="21" fill="rgb(255,213,213)" fg:x="598673" fg:w="38787"/><text x="92.7900%" y="509.50">    ..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh_prepare.py:31 (fill_mesh) (38,844 samples, 6.00%)</title><rect x="92.5400%" y="430" width="6.0043%" height="21" fill="rgb(255,213,213)" fg:x="598673" fg:w="38844"/><text x="92.7900%" y="443.50">/medi..</text></g><g><title>                            features=mesh_data.features) (38,844 samples, 6.00%)</title><rect x="92.5400%" y="452" width="6.0043%" height="21" fill="rgb(255,213,213)" fg:x="598673" fg:w="38844"/><text x="92.7900%" y="465.50">    ..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/models/layers/mesh.py:16 (__init__) (638,756 samples, 98.74%)</title><rect x="0.0692%" y="386" width="98.7359%" height="21" fill="rgb(255,100,100)" fg:x="448" fg:w="638756"/><text x="0.3192%" y="399.50">/media/Data1/siddharth/MCNN-Rot/models/layers/mesh.py:16 (__init__)</text></g><g><title>        fill_mesh(self, file, opt) (638,756 samples, 98.74%)</title><rect x="0.0692%" y="408" width="98.7359%" height="21" fill="rgb(255,100,100)" fg:x="448" fg:w="638756"/><text x="0.3192%" y="421.50">        fill_mesh(self, file, opt)</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:32 (__getitem__) (638,817 samples, 98.75%)</title><rect x="0.0692%" y="342" width="98.7453%" height="21" fill="rgb(255,100,100)" fg:x="448" fg:w="638817"/><text x="0.3192%" y="355.50">/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:32 (__getitem__)</text></g><g><title>        mesh = Mesh(file=path, opt=self.opt, hold_history=False, export_folder=self.opt.export_folder) (638,817 samples, 98.75%)</title><rect x="0.0692%" y="364" width="98.7453%" height="21" fill="rgb(255,100,100)" fg:x="448" fg:w="638817"/><text x="0.3192%" y="377.50">        mesh = Mesh(file=path, opt=self.opt, hold_history=False, export_folder=self.opt.export_folder)..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:36 (__getitem__) (1,308 samples, 0.20%)</title><rect x="98.8146%" y="342" width="0.2022%" height="21" fill="rgb(255,243,243)" fg:x="639265" fg:w="1308"/><text x="99.0646%" y="355.50"></text></g><g><title>        edge_features = pad(edge_features, self.opt.ninput_edges) (1,308 samples, 0.20%)</title><rect x="98.8146%" y="364" width="0.2022%" height="21" fill="rgb(255,243,243)" fg:x="639265" fg:w="1308"/><text x="99.0646%" y="377.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/base_dataset.py:33 (get_mean_std) (640,897 samples, 99.07%)</title><rect x="0.0692%" y="298" width="99.0668%" height="21" fill="rgb(255,100,100)" fg:x="448" fg:w="640897"/><text x="0.3192%" y="311.50">/media/Data1/siddharth/MCNN-Rot/data/base_dataset.py:33 (get_mean_std)</text></g><g><title>            for i, data in enumerate(self): (640,897 samples, 99.07%)</title><rect x="0.0692%" y="320" width="99.0668%" height="21" fill="rgb(255,100,100)" fg:x="448" fg:w="640897"/><text x="0.3192%" y="333.50">            for i, data in enumerate(self):</text></g><g><title>train.py:17 (&lt;module&gt;) (642,679 samples, 99.34%)</title><rect x="0.0110%" y="122" width="99.3423%" height="21" fill="rgb(255,100,100)" fg:x="71" fg:w="642679"/><text x="0.2610%" y="135.50">train.py:17 (&lt;module&gt;)</text></g><g><title>    dataset = DataLoader(opt) (642,679 samples, 99.34%)</title><rect x="0.0110%" y="144" width="99.3423%" height="21" fill="rgb(255,100,100)" fg:x="71" fg:w="642679"/><text x="0.2610%" y="157.50">    dataset = DataLoader(opt)</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/__init__.py:21 (__init__) (642,679 samples, 99.34%)</title><rect x="0.0110%" y="166" width="99.3423%" height="21" fill="rgb(255,100,100)" fg:x="71" fg:w="642679"/><text x="0.2610%" y="179.50">/media/Data1/siddharth/MCNN-Rot/data/__init__.py:21 (__init__)</text></g><g><title>        self.dataset = CreateDataset(opt) (642,679 samples, 99.34%)</title><rect x="0.0110%" y="188" width="99.3423%" height="21" fill="rgb(255,100,100)" fg:x="71" fg:w="642679"/><text x="0.2610%" y="201.50">        self.dataset = CreateDataset(opt)</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/__init__.py:12 (CreateDataset) (642,679 samples, 99.34%)</title><rect x="0.0110%" y="210" width="99.3423%" height="21" fill="rgb(255,100,100)" fg:x="71" fg:w="642679"/><text x="0.2610%" y="223.50">/media/Data1/siddharth/MCNN-Rot/data/__init__.py:12 (CreateDataset)</text></g><g><title>        dataset = ClassificationData(opt) (642,679 samples, 99.34%)</title><rect x="0.0110%" y="232" width="99.3423%" height="21" fill="rgb(255,100,100)" fg:x="71" fg:w="642679"/><text x="0.2610%" y="245.50">        dataset = ClassificationData(opt)</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:24 (__init__) (642,302 samples, 99.28%)</title><rect x="0.0692%" y="254" width="99.2840%" height="21" fill="rgb(255,100,100)" fg:x="448" fg:w="642302"/><text x="0.3192%" y="267.50">/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:24 (__init__)</text></g><g><title>        self.get_mean_std() (642,302 samples, 99.28%)</title><rect x="0.0692%" y="276" width="99.2840%" height="21" fill="rgb(255,100,100)" fg:x="448" fg:w="642302"/><text x="0.3192%" y="289.50">        self.get_mean_std()</text></g><g class="waiting-frame"><title>? Other ? (3,287 samples, 0.51%)</title><rect x="99.3945%" y="430" width="0.5081%" height="21" fill="rgb(255,239,239)" fg:x="643017" fg:w="3287"/><text x="99.6445%" y="443.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/os.py:362 (walk) (3,337 samples, 0.52%)</title><rect x="99.3945%" y="386" width="0.5158%" height="21" fill="rgb(255,239,239)" fg:x="643017" fg:w="3337"/><text x="99.6445%" y="399.50"></text></g><g><title>                    entry = next(scandir_it) (3,337 samples, 0.52%)</title><rect x="99.3945%" y="408" width="0.5158%" height="21" fill="rgb(255,239,239)" fg:x="643017" fg:w="3337"/><text x="99.6445%" y="421.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:59 (make_dataset_by_class) (4,108 samples, 0.63%)</title><rect x="99.3638%" y="298" width="0.6350%" height="21" fill="rgb(255,238,238)" fg:x="642818" fg:w="4108"/><text x="99.6138%" y="311.50"></text></g><g><title>            for root, _, fnames in sorted(os.walk(d)): (4,108 samples, 0.63%)</title><rect x="99.3638%" y="320" width="0.6350%" height="21" fill="rgb(255,238,238)" fg:x="642818" fg:w="4108"/><text x="99.6138%" y="333.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/os.py:413 (walk) (3,909 samples, 0.60%)</title><rect x="99.3945%" y="342" width="0.6042%" height="21" fill="rgb(255,238,238)" fg:x="643017" fg:w="3909"/><text x="99.6445%" y="355.50"></text></g><g><title>                yield from walk(new_path, topdown, onerror, followlinks) (3,909 samples, 0.60%)</title><rect x="99.3945%" y="364" width="0.6042%" height="21" fill="rgb(255,238,238)" fg:x="643017" fg:w="3909"/><text x="99.6445%" y="377.50"></text></g><g><title>all (646,934 samples, 100%)</title><rect x="0.0000%" y="100" width="100.0000%" height="21" fill="rgb(255,100,100)" fg:x="0" fg:w="646934"/><text x="0.2500%" y="113.50"></text></g><g><title>train.py:40 (&lt;module&gt;) (4,116 samples, 0.64%)</title><rect x="99.3638%" y="122" width="0.6362%" height="21" fill="rgb(255,238,238)" fg:x="642818" fg:w="4116"/><text x="99.6138%" y="135.50"></text></g><g><title>        dataset = DataLoader(opt) (4,116 samples, 0.64%)</title><rect x="99.3638%" y="144" width="0.6362%" height="21" fill="rgb(255,238,238)" fg:x="642818" fg:w="4116"/><text x="99.6138%" y="157.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/__init__.py:21 (__init__) (4,116 samples, 0.64%)</title><rect x="99.3638%" y="166" width="0.6362%" height="21" fill="rgb(255,238,238)" fg:x="642818" fg:w="4116"/><text x="99.6138%" y="179.50"></text></g><g><title>        self.dataset = CreateDataset(opt) (4,116 samples, 0.64%)</title><rect x="99.3638%" y="188" width="0.6362%" height="21" fill="rgb(255,238,238)" fg:x="642818" fg:w="4116"/><text x="99.6138%" y="201.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/__init__.py:12 (CreateDataset) (4,116 samples, 0.64%)</title><rect x="99.3638%" y="210" width="0.6362%" height="21" fill="rgb(255,238,238)" fg:x="642818" fg:w="4116"/><text x="99.6138%" y="223.50"></text></g><g><title>        dataset = ClassificationData(opt) (4,116 samples, 0.64%)</title><rect x="99.3638%" y="232" width="0.6362%" height="21" fill="rgb(255,238,238)" fg:x="642818" fg:w="4116"/><text x="99.6138%" y="245.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:19 (__init__) (4,116 samples, 0.64%)</title><rect x="99.3638%" y="254" width="0.6362%" height="21" fill="rgb(255,238,238)" fg:x="642818" fg:w="4116"/><text x="99.6138%" y="267.50"></text></g><g><title>        self.paths = self.make_dataset_by_class(self.dir, self.class_to_idx, opt.phase,opt.fraction_of_data_per_class) (4,116 samples, 0.64%)</title><rect x="99.3638%" y="276" width="0.6362%" height="21" fill="rgb(255,238,238)" fg:x="642818" fg:w="4116"/><text x="99.6138%" y="289.50"></text></g></svg><style type="text/css">
+.waiting-frame rect { fill: #ffb264; }
+.dead-frame rect, .unstarted-frame rect { fill-opacity: 0.3; fill: white; }
+.running-frame rect { fill: #b2b2ff; }
+</style></svg>

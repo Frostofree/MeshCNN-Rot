@@ -1,0 +1,504 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="3658" onload="init(evt)" viewBox="0 0 1200 3658" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#fcfcfc" offset="5%"/><stop stop-color="#fcfcfc" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:monospace; font-size:16px }
+#title { text-anchor:middle; font-size:21px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 16;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = true;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames, known_font_width;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    known_font_width = get_monospace_width(frames);
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+            svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            update_text_for_elements(frames.children);
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function get_monospace_width(frames) {
+    // Given the id="frames" element, return the width of text characters if
+    // this is a monospace font, otherwise return 0.
+    text = find_child(frames.children[0], "text");
+    originalContent = text.textContent;
+    text.textContent = "!";
+    bangWidth = text.getComputedTextLength();
+    text.textContent = "W";
+    wWidth = text.getComputedTextLength();
+    text.textContent = originalContent;
+    if (bangWidth === wWidth) {
+        return bangWidth;
+    } else {
+        return 0;
+    }
+}
+function update_text_for_elements(elements) {
+    // In order to render quickly in the browser, you want to do one pass of
+    // reading attributes, and one pass of mutating attributes. See
+    // https://web.dev/avoid-large-complex-layouts-and-layout-thrashing/ for details.
+
+    // Fall back to inefficient calculation, if we're variable-width font.
+    // TODO This should be optimized somehow too.
+    if (known_font_width === 0) {
+        for (var i = 0; i < elements.length; i++) {
+            update_text(elements[i]);
+        }
+        return;
+    }
+
+    var textElemNewAttributes = [];
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var r = find_child(e, "rect");
+        var t = find_child(e, "text");
+        var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+        var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+        var newX = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+        // Smaller than this size won't fit anything
+        if (w < 2 * known_font_width) {
+            textElemNewAttributes.push([newX, ""]);
+            continue;
+        }
+
+        // Fit in full text width
+        if (txt.length * known_font_width < w) {
+            textElemNewAttributes.push([newX, txt]);
+            continue;
+        }
+
+        var substringLength = Math.floor(w / known_font_width) - 2;
+        if (truncate_text_right) {
+            // Truncate the right side of the text.
+            textElemNewAttributes.push([newX, txt.substring(0, substringLength) + ".."]);
+            continue;
+        } else {
+            // Truncate the left side of the text.
+            textElemNewAttributes.push([newX, ".." + txt.substring(txt.length - substringLength, txt.length)]);
+            continue;
+        }
+    }
+
+    console.assert(textElemNewAttributes.length === elements.length, "Resize failed, please file a bug at https://github.com/jonhoo/inferno/");
+
+    // Now that we know new textContent, set it all in one go so we don't refresh a bazillion times.
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var values = textElemNewAttributes[i];
+        var t = find_child(e, "text");
+        t.attributes.x.value = values[0];
+        t.textContent = values[1];
+    }
+}
+
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    var to_update_text = [];
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                to_update_text.push(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                to_update_text.push(e);
+            }
+        }
+    }
+    update_text_for_elements(to_update_text);
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+    }
+    update_text_for_elements(el);
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="3658" fill="url(#background)"/><text id="title" fill="rgb(0,0,0)" x="50.0000%" y="32.00"></text><text id="details" fill="rgb(0,0,0)" x="10" y="52.00"> </text><text id="unzoom" class="hide" fill="rgb(0,0,0)" x="10" y="32.00">Reset Zoom</text><text id="search" fill="rgb(0,0,0)" x="1190" y="32.00">Search</text><text id="matched" fill="rgb(0,0,0)" x="1190" y="3645.00"> </text><svg id="frames" x="10" width="1180" total_samples="517"><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/__init__.py:197 (&lt;module&gt;) (188 ms, 36.36%)</title><rect x="0.0000%" y="1234" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1247.50">/home/siddharth/miniconda3/envs/new_MCNN/lib..</text></g><g><title>    from torch._C import *  # noqa: F403 (188 ms, 36.36%)</title><rect x="0.0000%" y="1256" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1269.50">    from torch._C import *  # noqa: F403..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (188 ms, 36.36%)</title><rect x="0.0000%" y="1278" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1291.50">&lt;frozen importlib._bootstrap&gt;:983 (_find_and..</text></g><g><title> (188 ms, 36.36%)</title><rect x="0.0000%" y="1300" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1313.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (188 ms, 36.36%)</title><rect x="0.0000%" y="1322" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1335.50">&lt;frozen importlib._bootstrap&gt;:967 (_find_and..</text></g><g><title> (188 ms, 36.36%)</title><rect x="0.0000%" y="1344" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1357.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:670 (_load_unlocked) (188 ms, 36.36%)</title><rect x="0.0000%" y="1366" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1379.50">&lt;frozen importlib._bootstrap&gt;:670 (_load_unl..</text></g><g><title> (188 ms, 36.36%)</title><rect x="0.0000%" y="1388" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1401.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:583 (module_from_spec) (188 ms, 36.36%)</title><rect x="0.0000%" y="1410" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1423.50">&lt;frozen importlib._bootstrap&gt;:583 (module_fr..</text></g><g><title> (188 ms, 36.36%)</title><rect x="0.0000%" y="1432" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1445.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:1043 (create_module) (188 ms, 36.36%)</title><rect x="0.0000%" y="1454" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1467.50">&lt;frozen importlib._bootstrap_external&gt;:1043 ..</text></g><g><title> (188 ms, 36.36%)</title><rect x="0.0000%" y="1476" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1489.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (188 ms, 36.36%)</title><rect x="0.0000%" y="1498" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1511.50">&lt;frozen importlib._bootstrap&gt;:219 (_call_wit..</text></g><g><title> (188 ms, 36.36%)</title><rect x="0.0000%" y="1520" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1533.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (188 ms, 36.36%)</title><rect x="0.0000%" y="1542" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="0" fg:w="188"/><text x="0.2500%" y="1555.50">➤ CPU ➤</text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/__init__.py:643 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="36.3636%" y="1234" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1247.50">/home/sid..</text></g><g><title>from .functional import *  # noqa: F403 (47 ms, 9.09%)</title><rect x="36.3636%" y="1256" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1269.50">from .fu..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="36.3636%" y="1278" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1291.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1300" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1313.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="1322" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1335.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1344" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1357.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="1366" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1379.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1388" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1401.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (47 ms, 9.09%)</title><rect x="36.3636%" y="1410" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1423.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1432" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1445.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="36.3636%" y="1454" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1467.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1476" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1489.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/functional.py:6 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="36.3636%" y="1498" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1511.50">/home/sid..</text></g><g><title>import torch.nn.functional as F (47 ms, 9.09%)</title><rect x="36.3636%" y="1520" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1533.50">import t..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="36.3636%" y="1542" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1555.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1564" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1577.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:953 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="1586" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1599.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1608" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1621.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="36.3636%" y="1630" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1643.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1652" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1665.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="36.3636%" y="1674" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1687.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1696" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1709.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="1718" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1731.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1740" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1753.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="1762" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1775.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1784" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1797.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (47 ms, 9.09%)</title><rect x="36.3636%" y="1806" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1819.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1828" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1841.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="36.3636%" y="1850" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1863.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1872" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1885.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/nn/__init__.py:1 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="36.3636%" y="1894" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1907.50">/home/sid..</text></g><g><title>from .modules import *  # noqa: F403 (47 ms, 9.09%)</title><rect x="36.3636%" y="1916" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1929.50">from .mo..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="36.3636%" y="1938" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1951.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="1960" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1973.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="1982" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="1995.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2004" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2017.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="2026" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2039.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2048" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2061.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (47 ms, 9.09%)</title><rect x="36.3636%" y="2070" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2083.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2092" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2105.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="36.3636%" y="2114" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2127.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2136" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2149.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/nn/modules/__init__.py:2 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="36.3636%" y="2158" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2171.50">/home/sid..</text></g><g><title>from .linear import Identity, Linear, Bilinear, LazyLinear (47 ms, 9.09%)</title><rect x="36.3636%" y="2180" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2193.50">from .li..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="36.3636%" y="2202" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2215.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2224" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2237.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="2246" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2259.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2268" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2281.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="2290" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2303.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2312" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2325.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (47 ms, 9.09%)</title><rect x="36.3636%" y="2334" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2347.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2356" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2369.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="36.3636%" y="2378" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2391.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2400" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2413.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/nn/modules/linear.py:6 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="36.3636%" y="2422" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2435.50">/home/sid..</text></g><g><title>from .. import functional as F (47 ms, 9.09%)</title><rect x="36.3636%" y="2444" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2457.50">from .. ..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:1035 (_handle_fromlist) (47 ms, 9.09%)</title><rect x="36.3636%" y="2466" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2479.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2488" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2501.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="36.3636%" y="2510" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2523.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2532" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2545.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="36.3636%" y="2554" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2567.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2576" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2589.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="2598" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2611.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2620" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2633.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="2642" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2655.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2664" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2677.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (47 ms, 9.09%)</title><rect x="36.3636%" y="2686" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2699.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2708" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2721.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="36.3636%" y="2730" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2743.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2752" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2765.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/nn/functional.py:11 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="36.3636%" y="2774" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2787.50">/home/sid..</text></g><g><title>from .._jit_internal import boolean_dispatch, _overload, BroadcastingList1, BroadcastingList2, BroadcastingList3 (47 ms, 9.09%)</title><rect x="36.3636%" y="2796" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2809.50">from .._..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="36.3636%" y="2818" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2831.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2840" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2853.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="2862" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2875.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2884" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2897.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="2906" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2919.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2928" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2941.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (47 ms, 9.09%)</title><rect x="36.3636%" y="2950" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2963.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="2972" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="2985.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="36.3636%" y="2994" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3007.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="3016" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3029.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/_jit_internal.py:24 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="36.3636%" y="3038" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3051.50">/home/sid..</text></g><g><title>import torch.distributed.rpc (47 ms, 9.09%)</title><rect x="36.3636%" y="3060" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3073.50">import t..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="36.3636%" y="3082" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3095.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="3104" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3117.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="3126" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3139.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="3148" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3161.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="3170" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3183.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="3192" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3205.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (47 ms, 9.09%)</title><rect x="36.3636%" y="3214" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3227.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="3236" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3249.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="36.3636%" y="3258" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3271.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="3280" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3293.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/distributed/rpc/__init__.py:70 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="36.3636%" y="3302" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3315.50">/home/sid..</text></g><g><title>    from .options import TensorPipeRpcBackendOptions  # noqa: F401 (47 ms, 9.09%)</title><rect x="36.3636%" y="3324" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3337.50">    from..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="36.3636%" y="3346" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3359.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="3368" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3381.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="3390" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3403.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="3412" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3425.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="36.3636%" y="3434" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3447.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="3456" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3469.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (47 ms, 9.09%)</title><rect x="36.3636%" y="3478" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3491.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="3500" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3513.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="36.3636%" y="3522" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3535.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="36.3636%" y="3544" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3557.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/distributed/rpc/options.py:2 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="36.3636%" y="3566" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3579.50">/home/sid..</text></g><g><title>from . import constants as rpc_contants (47 ms, 9.09%)</title><rect x="36.3636%" y="3588" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3601.50">from . i..</text></g><g class="running-frame"><title>➤ CPU ➤ (47 ms, 9.09%)</title><rect x="36.3636%" y="3610" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="188" fg:w="47"/><text x="36.6136%" y="3623.50">➤ CPU ➤..</text></g><g><title>train.py:2 (&lt;module&gt;) (282 ms, 54.55%)</title><rect x="0.0000%" y="90" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="103.50">train.py:2 (&lt;module&gt;)</text></g><g><title>from options.train_options import TrainOptions (282 ms, 54.55%)</title><rect x="0.0000%" y="112" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="125.50">from options.train_options import TrainOptions</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (282 ms, 54.55%)</title><rect x="0.0000%" y="134" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="147.50">&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="156" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="169.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (282 ms, 54.55%)</title><rect x="0.0000%" y="178" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="191.50">&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="200" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="213.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (282 ms, 54.55%)</title><rect x="0.0000%" y="222" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="235.50">&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="244" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="257.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (282 ms, 54.55%)</title><rect x="0.0000%" y="266" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="279.50">&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="288" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="301.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (282 ms, 54.55%)</title><rect x="0.0000%" y="310" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="323.50">&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="332" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="345.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/options/train_options.py:1 (&lt;module&gt;) (282 ms, 54.55%)</title><rect x="0.0000%" y="354" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="367.50">/media/Data1/siddharth/MCNN-Rot/options/train_options.py:1 (&lt;module..</text></g><g><title>from .base_options import BaseOptions (282 ms, 54.55%)</title><rect x="0.0000%" y="376" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="389.50">from .base_options import BaseOptions</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (282 ms, 54.55%)</title><rect x="0.0000%" y="398" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="411.50">&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="420" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="433.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (282 ms, 54.55%)</title><rect x="0.0000%" y="442" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="455.50">&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="464" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="477.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (282 ms, 54.55%)</title><rect x="0.0000%" y="486" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="499.50">&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="508" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="521.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (282 ms, 54.55%)</title><rect x="0.0000%" y="530" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="543.50">&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="552" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="565.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (282 ms, 54.55%)</title><rect x="0.0000%" y="574" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="587.50">&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="596" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="609.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/options/base_options.py:3 (&lt;module&gt;) (282 ms, 54.55%)</title><rect x="0.0000%" y="618" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="631.50">/media/Data1/siddharth/MCNN-Rot/options/base_options.py:3 (&lt;module&gt;)</text></g><g><title>from util import util (282 ms, 54.55%)</title><rect x="0.0000%" y="640" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="653.50">from util import util</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:1035 (_handle_fromlist) (282 ms, 54.55%)</title><rect x="0.0000%" y="662" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="675.50">&lt;frozen importlib._bootstrap&gt;:1035 (_handle_fromlist)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="684" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="697.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (282 ms, 54.55%)</title><rect x="0.0000%" y="706" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="719.50">&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="728" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="741.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (282 ms, 54.55%)</title><rect x="0.0000%" y="750" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="763.50">&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="772" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="785.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (282 ms, 54.55%)</title><rect x="0.0000%" y="794" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="807.50">&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="816" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="829.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (282 ms, 54.55%)</title><rect x="0.0000%" y="838" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="851.50">&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="860" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="873.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (282 ms, 54.55%)</title><rect x="0.0000%" y="882" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="895.50">&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="904" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="917.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (282 ms, 54.55%)</title><rect x="0.0000%" y="926" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="939.50">&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="948" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="961.50"></text></g><g><title>/media/Data1/siddharth/MCNN-Rot/util/util.py:2 (&lt;module&gt;) (282 ms, 54.55%)</title><rect x="0.0000%" y="970" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="983.50">/media/Data1/siddharth/MCNN-Rot/util/util.py:2 (&lt;module&gt;)</text></g><g><title>import torch (282 ms, 54.55%)</title><rect x="0.0000%" y="992" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="1005.50">import torch</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (282 ms, 54.55%)</title><rect x="0.0000%" y="1014" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="1027.50">&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="1036" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="1049.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (282 ms, 54.55%)</title><rect x="0.0000%" y="1058" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="1071.50">&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="1080" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="1093.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (282 ms, 54.55%)</title><rect x="0.0000%" y="1102" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="1115.50">&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="1124" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="1137.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (282 ms, 54.55%)</title><rect x="0.0000%" y="1146" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="1159.50">&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="1168" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="1181.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (282 ms, 54.55%)</title><rect x="0.0000%" y="1190" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="1203.50">&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed)</text></g><g><title> (282 ms, 54.55%)</title><rect x="0.0000%" y="1212" width="54.5455%" height="21" fill="rgb(255,139,139)" fg:x="0" fg:w="282"/><text x="0.2500%" y="1225.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/__init__.py:704 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="45.4545%" y="1234" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1247.50">/home/sid..</text></g><g><title>from torch import multiprocessing as multiprocessing (47 ms, 9.09%)</title><rect x="45.4545%" y="1256" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1269.50">from tor..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:1035 (_handle_fromlist) (47 ms, 9.09%)</title><rect x="45.4545%" y="1278" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1291.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1300" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1313.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="45.4545%" y="1322" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1335.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1344" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1357.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="45.4545%" y="1366" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1379.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1388" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1401.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="45.4545%" y="1410" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1423.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1432" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1445.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="45.4545%" y="1454" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1467.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1476" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1489.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (47 ms, 9.09%)</title><rect x="45.4545%" y="1498" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1511.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1520" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1533.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="45.4545%" y="1542" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1555.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1564" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1577.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/multiprocessing/__init__.py:18 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="45.4545%" y="1586" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1599.50">/home/sid..</text></g><g><title>from .reductions import init_reductions (47 ms, 9.09%)</title><rect x="45.4545%" y="1608" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1621.50">from .re..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="45.4545%" y="1630" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1643.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1652" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1665.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="45.4545%" y="1674" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1687.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1696" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1709.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="45.4545%" y="1718" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1731.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1740" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1753.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (47 ms, 9.09%)</title><rect x="45.4545%" y="1762" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1775.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1784" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1797.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="45.4545%" y="1806" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1819.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1828" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1841.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/site-packages/torch/multiprocessing/reductions.py:6 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="45.4545%" y="1850" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1863.50">/home/sid..</text></g><g><title>import multiprocessing (47 ms, 9.09%)</title><rect x="45.4545%" y="1872" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1885.50">import m..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="45.4545%" y="1894" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1907.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1916" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1929.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="45.4545%" y="1938" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1951.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="1960" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1973.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="45.4545%" y="1982" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="1995.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="2004" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2017.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:728 (exec_module) (47 ms, 9.09%)</title><rect x="45.4545%" y="2026" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2039.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="2048" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2061.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="45.4545%" y="2070" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2083.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="2092" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2105.50"></text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/multiprocessing/__init__.py:16 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="45.4545%" y="2114" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2127.50">/home/sid..</text></g><g><title>from . import context (47 ms, 9.09%)</title><rect x="45.4545%" y="2136" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2149.50">from . i..</text></g><g><title>&lt;frozen importlib._bootstrap&gt;:1035 (_handle_fromlist) (47 ms, 9.09%)</title><rect x="45.4545%" y="2158" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2171.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="2180" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2193.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:219 (_call_with_frames_removed) (47 ms, 9.09%)</title><rect x="45.4545%" y="2202" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2215.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="2224" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2237.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:983 (_find_and_load) (47 ms, 9.09%)</title><rect x="45.4545%" y="2246" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2259.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="2268" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2281.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:967 (_find_and_load_unlocked) (47 ms, 9.09%)</title><rect x="45.4545%" y="2290" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2303.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="2312" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2325.50"></text></g><g><title>&lt;frozen importlib._bootstrap&gt;:677 (_load_unlocked) (47 ms, 9.09%)</title><rect x="45.4545%" y="2334" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2347.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="2356" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2369.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:724 (exec_module) (47 ms, 9.09%)</title><rect x="45.4545%" y="2378" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2391.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="2400" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2413.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:857 (get_code) (47 ms, 9.09%)</title><rect x="45.4545%" y="2422" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2435.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="2444" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2457.50"></text></g><g><title>&lt;frozen importlib._bootstrap_external&gt;:525 (_compile_bytecode) (47 ms, 9.09%)</title><rect x="45.4545%" y="2466" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2479.50">&lt;frozen i..</text></g><g><title> (47 ms, 9.09%)</title><rect x="45.4545%" y="2488" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2501.50"></text></g><g class="running-frame"><title>➤ CPU ➤ (47 ms, 9.09%)</title><rect x="45.4545%" y="2510" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="235" fg:w="47"/><text x="45.7045%" y="2523.50">➤ CPU ➤..</text></g><g><title>train.py:11 (&lt;module&gt;) (47 ms, 9.09%)</title><rect x="54.5455%" y="90" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="282" fg:w="47"/><text x="54.7955%" y="103.50">train.py:..</text></g><g><title>    opt = TrainOptions().parse() (47 ms, 9.09%)</title><rect x="54.5455%" y="112" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="282" fg:w="47"/><text x="54.7955%" y="125.50">    opt ..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/options/base_options.py:86 (parse) (47 ms, 9.09%)</title><rect x="54.5455%" y="134" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="282" fg:w="47"/><text x="54.7955%" y="147.50">/media/Da..</text></g><g><title>                opt_file.write(&apos;-------------- End ----------------\n&apos;) (47 ms, 9.09%)</title><rect x="54.5455%" y="156" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="282" fg:w="47"/><text x="54.7955%" y="169.50">        ..</text></g><g class="waiting-frame"><title>? Other ? (47 ms, 9.09%)</title><rect x="54.5455%" y="178" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="282" fg:w="47"/><text x="54.7955%" y="191.50">? Other ?</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:17 (__init__) (47 ms, 9.09%)</title><rect x="63.6364%" y="222" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="329" fg:w="47"/><text x="63.8864%" y="235.50">/media/Da..</text></g><g><title>        self.classes, self.class_to_idx = self.find_classes(self.dir) (47 ms, 9.09%)</title><rect x="63.6364%" y="244" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="329" fg:w="47"/><text x="63.8864%" y="257.50">        ..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:46 (find_classes) (47 ms, 9.09%)</title><rect x="63.6364%" y="266" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="329" fg:w="47"/><text x="63.8864%" y="279.50">/media/Da..</text></g><g><title>        classes = [d for d in os.listdir(dir) if os.path.isdir(os.path.join(dir, d))] (47 ms, 9.09%)</title><rect x="63.6364%" y="288" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="329" fg:w="47"/><text x="63.8864%" y="301.50">        ..</text></g><g class="running-frame"><title>➤ CPU ➤ (47 ms, 9.09%)</title><rect x="63.6364%" y="310" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="329" fg:w="47"/><text x="63.8864%" y="323.50">➤ CPU ➤..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:71 (make_dataset_by_class) (47 ms, 9.09%)</title><rect x="72.7273%" y="266" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="376" fg:w="47"/><text x="72.9773%" y="279.50">/media/Da..</text></g><g><title>            for entry in os.scandir(d): (47 ms, 9.09%)</title><rect x="72.7273%" y="288" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="376" fg:w="47"/><text x="72.9773%" y="301.50">        ..</text></g><g class="running-frame"><title>➤ CPU ➤ (47 ms, 9.09%)</title><rect x="72.7273%" y="310" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="376" fg:w="47"/><text x="72.9773%" y="323.50">➤ CPU ➤..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:57 (make_dataset_by_class) (47 ms, 9.09%)</title><rect x="81.8182%" y="266" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="423" fg:w="47"/><text x="82.0682%" y="279.50">/media/Da..</text></g><g><title>            if not os.path.isdir(d): (47 ms, 9.09%)</title><rect x="81.8182%" y="288" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="423" fg:w="47"/><text x="82.0682%" y="301.50">        ..</text></g><g><title>/home/siddharth/miniconda3/envs/new_MCNN/lib/python3.7/genericpath.py:45 (isdir) (47 ms, 9.09%)</title><rect x="81.8182%" y="310" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="423" fg:w="47"/><text x="82.0682%" y="323.50">/home/sid..</text></g><g><title>    return stat.S_ISDIR(st.st_mode) (47 ms, 9.09%)</title><rect x="81.8182%" y="332" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="423" fg:w="47"/><text x="82.0682%" y="345.50">    retu..</text></g><g class="running-frame"><title>➤ CPU ➤ (47 ms, 9.09%)</title><rect x="81.8182%" y="354" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="423" fg:w="47"/><text x="82.0682%" y="367.50">➤ CPU ➤..</text></g><g><title>all (517 ms, 100%)</title><rect x="0.0000%" y="68" width="100.0000%" height="21" fill="rgb(255,100,100)" fg:x="0" fg:w="517"/><text x="0.2500%" y="81.50"></text></g><g><title>train.py:17 (&lt;module&gt;) (188 ms, 36.36%)</title><rect x="63.6364%" y="90" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="329" fg:w="188"/><text x="63.8864%" y="103.50">train.py:17 (&lt;module&gt;)</text></g><g><title>    dataset = DataLoader(opt) (188 ms, 36.36%)</title><rect x="63.6364%" y="112" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="329" fg:w="188"/><text x="63.8864%" y="125.50">    dataset = DataLoader(opt)</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/__init__.py:21 (__init__) (188 ms, 36.36%)</title><rect x="63.6364%" y="134" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="329" fg:w="188"/><text x="63.8864%" y="147.50">/media/Data1/siddharth/MCNN-Rot/data/__init_..</text></g><g><title>        self.dataset = CreateDataset(opt) (188 ms, 36.36%)</title><rect x="63.6364%" y="156" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="329" fg:w="188"/><text x="63.8864%" y="169.50">        self.dataset = CreateDataset(opt)..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/__init__.py:12 (CreateDataset) (188 ms, 36.36%)</title><rect x="63.6364%" y="178" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="329" fg:w="188"/><text x="63.8864%" y="191.50">/media/Data1/siddharth/MCNN-Rot/data/__init_..</text></g><g><title>        dataset = ClassificationData(opt) (188 ms, 36.36%)</title><rect x="63.6364%" y="200" width="36.3636%" height="21" fill="rgb(255,159,159)" fg:x="329" fg:w="188"/><text x="63.8864%" y="213.50">        dataset = ClassificationData(opt)..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:19 (__init__) (141 ms, 27.27%)</title><rect x="72.7273%" y="222" width="27.2727%" height="21" fill="rgb(255,171,171)" fg:x="376" fg:w="141"/><text x="72.9773%" y="235.50">/media/Data1/siddharth/MCNN-Rot/..</text></g><g><title>        self.paths = self.make_dataset_by_class(self.dir, self.class_to_idx, opt.phase,opt.fraction_of_data_per_class) (141 ms, 27.27%)</title><rect x="72.7273%" y="244" width="27.2727%" height="21" fill="rgb(255,171,171)" fg:x="376" fg:w="141"/><text x="72.9773%" y="257.50">        self.paths = self.make_..</text></g><g><title>/media/Data1/siddharth/MCNN-Rot/data/classification_data.py:71 (make_dataset_by_class) (47 ms, 9.09%)</title><rect x="90.9091%" y="266" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="470" fg:w="47"/><text x="91.1591%" y="279.50">/media/Da..</text></g><g><title>            for entry in os.scandir(d): (47 ms, 9.09%)</title><rect x="90.9091%" y="288" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="470" fg:w="47"/><text x="91.1591%" y="301.50">        ..</text></g><g class="running-frame"><title>➤ CPU ➤ (47 ms, 9.09%)</title><rect x="90.9091%" y="310" width="9.0909%" height="21" fill="rgb(255,204,204)" fg:x="470" fg:w="47"/><text x="91.1591%" y="323.50">➤ CPU ➤..</text></g>
+</svg>
+<style type="text/css">
+.waiting-frame rect { fill: #ffb264; }
+.dead-frame rect, .unstarted-frame rect { fill-opacity: 0.3; fill: white; }
+.running-frame rect { fill: #b2b2ff; }
+#frames rect { clip-path: polygon(0% 0%, max(100% - 10px, 10px) 0%, 100% 50%, max(100% - 10px, 10px) 100%, 0% 100%); }
+#title { font-size: 18px !important; }
+</style>
+<script type="text/ecmascript"><![CDATA[
+// Hacky disabling of built-in zoom() functionality:
+function zoom(obj) {}
+]]></script>
+</svg>

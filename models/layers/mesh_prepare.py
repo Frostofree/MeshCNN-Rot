@@ -2,6 +2,7 @@ import numpy as np
 import os
 import ntpath
 import torch
+import time
 
 
 
@@ -11,7 +12,19 @@ def fill_mesh(mesh2fill, file: str, opt):
         mesh_data = np.load(load_path, encoding='latin1', allow_pickle=True)
     else:
         mesh_data = from_scratch(file, opt)
-        np.savez_compressed(load_path, gemm_edges=mesh_data.gemm_edges, vs=mesh_data.vs, edges=mesh_data.edges,
+        # print("Saving mesh data to: ", load_path)
+        # print("MESH DATA:")
+        # print(mesh_data.gemm_edges.shape)
+        # print(mesh_data.vs.shape)
+        # print(mesh_data.edges.shape)
+        # print(mesh_data.ve)
+        # print(mesh_data.edges_count.shape)
+        # print(mesh_data.v_mask.shape)
+        # print(mesh_data.filename.shape)
+
+
+
+        np.savez(load_path, gemm_edges=mesh_data.gemm_edges, vs=mesh_data.vs, edges=mesh_data.edges,
                             edges_count=mesh_data.edges_count, ve=mesh_data.ve, v_mask=mesh_data.v_mask,
                             filename=mesh_data.filename, sides=mesh_data.sides,
                             edge_lengths=mesh_data.edge_lengths, edge_areas=mesh_data.edge_areas,
@@ -54,11 +67,19 @@ def from_scratch(file, opt):
     mesh_data.edge_lengths = None
     mesh_data.edge_areas = []
     mesh_data.vs, faces = fill_from_file(mesh_data, file)
+    # mesh_data.v_mask = np.ones(len(mesh_data.vs), dtype=bool)
     mesh_data.v_mask = np.ones(len(mesh_data.vs), dtype=bool)
 
 
-    mesh_data.vs = rotate(mesh_data, file)
+    # faces = permute_face_order(mesh_data, faces)
+
+    # faces = patch_permute_faces(mesh_data, faces,8)
+    
+    # mesh_data.vs = rotate(mesh_data, file)                          # Applied this rotation augmentation step in the big model
+    # print("Vertices:",mesh_data.vs)
     faces, face_areas = remove_non_manifolds(mesh_data, faces)
+    # print("Faces:",faces)
+
     if opt.num_aug > 1:
         faces = augmentation(mesh_data, opt, faces)
     build_gemm(mesh_data, faces, face_areas)
@@ -67,14 +88,42 @@ def from_scratch(file, opt):
     mesh_data.features = extract_features(mesh_data)
     return mesh_data
 
+"""
+Vanilla M40 model - 11905 meshes
+2k - test
+9k - train
+
+Experiments -
+1. Patch Shuffle (2,4,6,8,10,12,14,16,random shuffle)
+
+Rotated M40 model - 11905 * 10 * 10 * 10 
+2k*10*10*10 - test
+9k*10*10*10 - train
+
+# 
+
+
+"""
+
 def rotate(mesh, file):
     '''This is the Rotation augmentation step I have defined'''
     vs = np.asarray(mesh.vs)
+
+    angles = [0,90,180,270]
 
     max_rotate_angle = 10
     x = np.random.uniform(-max_rotate_angle, max_rotate_angle) * np.pi / 180
     y = np.random.uniform(-max_rotate_angle, max_rotate_angle) * np.pi / 180
     z = np.random.uniform(-max_rotate_angle, max_rotate_angle) * np.pi / 180
+
+    # # Pick a random angle from the list of angles
+    # angle_x = np.random.choice(angles)
+    # angle_y = np.random.choice(angles)
+    # angle_z = np.random.choice(angles)
+
+    # x = angle_x * np.pi / 180
+    # y = angle_y * np.pi / 180
+    # z = angle_z * np.pi / 180
     
     A = np.array(
     ((np.cos(x), -np.sin(x), 0), (np.sin(x), np.cos(x), 0), (0, 0, 1)),
@@ -103,11 +152,59 @@ def rotate(mesh, file):
 
     return vs
 
+def patch_permute_faces(mesh, faces,patch_size,probab=1.0):
+    """
+    Permute the faces in patches of size patch_size
+
+    patch_size: int - the size of the patch, ie the number of faces to permute
+    faces: np.array - the faces to permute    
+    """
+    permuted_faces = np.zeros_like(faces)
+
+    permuted_faces = faces
+
+    array_shape = faces.shape
+    
+    # Calculate the number of full patches and the remaining rows
+    num_full_patches = array_shape[0] // patch_size
+    remaining_rows = array_shape[0] % patch_size
+
+    # Reshape the array into groups of 'patch_size' rows, with an extra row for the remaining rows
+    reshaped_array = faces[:num_full_patches * patch_size].reshape((num_full_patches, patch_size, array_shape[1]))
+
+    np.random.shuffle(reshaped_array)
+
+    permuted_faces = permuted_faces.reshape(-1,array_shape[1])
+
+    if remaining_rows > 0:
+        # If there are remaining rows, shuffle them and add them to the end of the reshaped array
+        remaining_rows = faces[num_full_patches * patch_size:].reshape((remaining_rows, array_shape[1]))
+        np.random.shuffle(remaining_rows)
+        permuted_faces = np.vstack((permuted_faces, remaining_rows))
+
+    
+    return permuted_faces
+
+
+def permute_faces(mesh, faces):
+    permuted_faces = np.zeros_like(faces)
+    for i in range(len(faces)):
+        permuted_faces[i] = faces[i][np.random.permutation(3)]
+
+    return permuted_faces
+
+def permute_face_order(mesh, faces):
+
+    permuted_faces = np.zeros_like(faces)
+    permuted_faces = np.random.permutation(faces)
+    return permuted_faces
+
 
 def fill_from_file(mesh, file):
     mesh.filename = ntpath.split(file)[1]
     mesh.fullfilename = file
     vs, faces = [], []
+    # print(file)
     f = open(file)
     for line in f:
         line = line.strip()
@@ -118,6 +215,7 @@ def fill_from_file(mesh, file):
             vs.append([float(v) for v in splitted_line[1:4]])
         elif splitted_line[0] == 'f':
             face_vertex_ids = [int(c.split('/')[0]) for c in splitted_line[1:]]
+            # print(mesh.filename)
             assert len(face_vertex_ids) == 3
             face_vertex_ids = [(ind - 1) if (ind >= 0) else (len(vs) + ind)
                                for ind in face_vertex_ids]
@@ -126,6 +224,8 @@ def fill_from_file(mesh, file):
     vs = np.asarray(vs)
     faces = np.asarray(faces, dtype=int)
     assert np.logical_and(faces >= 0, faces < len(vs)).all()
+    # print("Vertices:",vs)
+    # print("Faces:",faces)
     return vs, faces
 
 
@@ -161,7 +261,9 @@ def build_gemm(mesh, faces, face_areas):
     sides: array (#E x 4) indices (values of: 0,1,2,3) indicating where an edge is in the gemm_edge entry of the 4 neighboring edges
     for example edge i -> gemm_edges[gemm_edges[i], sides[i]] == [i, i, i, i]
     """
-    mesh.ve = [[] for _ in mesh.vs]
+    ve = [[] for _ in mesh.vs]
+    # print("debug: ", len(ve))
+    # print("shape of ve", np.shape(ve))
     edge_nb = []
     sides = []
     edge2key = dict()
@@ -181,8 +283,8 @@ def build_gemm(mesh, faces, face_areas):
                 edges.append(list(edge))
                 edge_nb.append([-1, -1, -1, -1])
                 sides.append([-1, -1, -1, -1])
-                mesh.ve[edge[0]].append(edges_count)
-                mesh.ve[edge[1]].append(edges_count)
+                ve[edge[0]].append(edges_count)
+                ve[edge[1]].append(edges_count)
                 mesh.edge_areas.append(0)
                 nb_count.append(0)
                 edges_count += 1
@@ -196,6 +298,8 @@ def build_gemm(mesh, faces, face_areas):
             edge_key = edge2key[edge]
             sides[edge_key][nb_count[edge_key] - 2] = nb_count[edge2key[faces_edges[(idx + 1) % 3]]] - 1
             sides[edge_key][nb_count[edge_key] - 1] = nb_count[edge2key[faces_edges[(idx + 2) % 3]]] - 2
+    
+    mesh.ve = ve
     mesh.edges = np.array(edges, dtype=np.int32)
     mesh.gemm_edges = np.array(edge_nb, dtype=np.int64)
     mesh.sides = np.array(sides, dtype=np.int64)

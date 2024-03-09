@@ -1,0 +1,16 @@
+<svg  preserveAspectRatio="none" height="288" viewBox="0 0 1150 288" xmlns="http://www.w3.org/2000/svg">
+<text x="0" y="144" dy="0.76em" text-anchor="middle" font-family="monospace" font-size="9.67741935483871" opacity="1" fill="#000000" transform="rotate(270, 0, 144)">
+# threads
+</text>
+<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="0,10 0,277 "/>
+<text x="10" y="277" dy="0.5ex" text-anchor="start" font-family="monospace" font-size="9.67741935483871" opacity="1" fill="#000000">
+0.0
+</text>
+<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="0,277 5,277 "/>
+<polyline fill="none" opacity="1" stroke="#FFB264" stroke-width="1" points="0,277 76,277 153,277 229,277 306,277 383,277 459,277 536,277 612,277 689,277 766,277 842,277 919,277 995,277 1072,144 1149,144 "/>
+<rect x="1057" y="129" width="88" height="30" opacity="1" fill="none" stroke="#000000"/>
+<text x="1097" y="139" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
+Waiting
+</text>
+<rect x="1062" y="144" width="10" height="1" opacity="1" fill="none" stroke="#FFB264"/>
+</svg>

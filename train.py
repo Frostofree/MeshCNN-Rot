@@ -5,20 +5,41 @@ from models import create_model
 from util.writer import Writer
 from test import run_test
 
+
+
 if __name__ == '__main__':
     opt = TrainOptions().parse()
+    # print("Train Options: succesfully parsed")
+
+    # For calculating the mean_std of the dataset, we take the entire dataset
+    fraction = opt.fraction_of_data_per_class
+    opt.fraction_of_data_per_class = 1.0
     dataset = DataLoader(opt)
+    # print("DataLoader: succesfully loaded")
     dataset_size = len(dataset)
-    print('#training meshes = %d' % dataset_size)
+    # print('#training meshes = %d' % dataset_size)
 
     model = create_model(opt)
+    # print("Model: succesfully created")
+    opt.fraction_of_data_per_class = fraction
     writer = Writer(opt)
+    # print("Writer: succesfully created")
     total_steps = 0
 
     for epoch in range(opt.epoch_count, opt.niter + opt.niter_decay + 1):
         epoch_start_time = time.time()
         iter_data_time = time.time()
         epoch_iter = 0
+        # i = 0
+        # dataset_len = len(dataset)
+        ## We want to Sample the dataset in a random order
+        # dataset = dataset
+        # dataset = dataset[torch.randperm(len(dataset))]
+
+        # Create a new DataLoader for each epoch, so that the dataset keeps changing every epoch ( number of rotation augementations change)
+        dataset = DataLoader(opt)
+        dataset_size = len(dataset)
+        print('#training meshes = %d' % dataset_size)
 
         for i, data in enumerate(dataset):
             iter_start_time = time.time()
@@ -26,6 +47,8 @@ if __name__ == '__main__':
                 t_data = iter_start_time - iter_data_time
             total_steps += opt.batch_size
             epoch_iter += opt.batch_size
+            # print(data)
+            # exit (0)
             model.set_input(data)
             model.optimize_parameters()
 

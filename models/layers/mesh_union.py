@@ -36,7 +36,8 @@ class MeshUnion:
         return fe
 
     def prepare_groups(self, features, mask):
-        tensor_mask = torch.from_numpy(mask)
+        # tensor_mask = torch.from_numpy(mask)
+        tensor_mask = torch.tensor(mask, dtype=torch.bool)
         self.groups = torch.clamp(self.groups[tensor_mask, :], 0, 1).transpose_(1, 0)
         padding_a = features.shape[1] - self.groups.shape[0]
         if padding_a > 0:
