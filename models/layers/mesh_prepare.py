@@ -463,7 +463,7 @@ def extract_features(mesh):
                 features.append(feature)
             return np.concatenate(features, axis=0)
         except Exception as e:
-            print(e)~
+            print(e)
             raise ValueError(mesh.filename, 'bad features')
 
 

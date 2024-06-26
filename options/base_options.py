@@ -17,7 +17,7 @@ class BaseOptions:
         self.parser.add_argument('--max_dataset_size', type=int, default=float("inf"), help='Maximum number of samples per epoch')
         self.parser.add_argument('--fraction_of_data_per_class', type=float, default=1.0, help='Fraction of data to use per class')
         # network params
-        self.parser.add_argument('--batch_size', type=int, default=16, help='input batch size')
+        self.parser.add_argument('--batch_size', type=int, default=1, help='input batch size')
         self.parser.add_argument('--arch', type=str, default='mconvnet', help='selects network to use') #todo add choices
         self.parser.add_argument('--resblocks', type=int, default=0, help='# of res blocks')
         self.parser.add_argument('--fc_n', type=int, default=100, help='# between fc and nclasses') #todo make generic
@@ -37,6 +37,11 @@ class BaseOptions:
         # visualization params
         self.parser.add_argument('--export_folder', type=str, default='', help='exports intermediate collapses to this folder')
         #
+        self.parser.add_argument('--part_size', type=int, help='partition size for part training')
+        self.parser.add_argument('--superepoch_base', type=int, help='base give miniepoch number')
+        self.parser.add_argument('--superepoch_decay_min', type=int, help='decay minimum epoch for the last partition of the dataset')
+        self.parser.add_argument('--superepoch_decay_max', type=int, help='decay maximum epoch for the last partition of the dataset')
+        self.parser.add_argument('--super_epoch', type=int, help='number of super epoch')
         self.initialized = True
 
     def parse(self):

@@ -27,7 +27,6 @@ class ClassifierModel:
 
         #
         self.nclasses = opt.nclasses
-
         # load/define networks
         self.net = networks.define_classifier(opt.input_nc, opt.ncf, opt.ninput_edges, opt.nclasses, opt,
                                               self.gpu_ids, opt.arch, opt.init_type, opt.init_gain)
@@ -60,6 +59,13 @@ class ClassifierModel:
             # self.soft_label = torch.from_numpy(data['soft_label'])
             self.soft_label = torch.tensor(data['soft_label'], dtype=torch.float32).to(self.device)
 
+    def reset_fc2_layer(self, init_gain):
+        def reset(m):
+            classname = m.__class__.__name__
+            if hasattr(m, 'weight') and classname.find('Linear') != -1 and m.weight.shape[0] == self.nclasses:
+                torch.nn.init.normal_(m.weight.data, 0.0, init_gain)
+        self.net.apply(reset)
+        return
 
     def forward(self):
         out , fc1 = self.net(self.edge_features, self.mesh)
@@ -75,9 +81,6 @@ class ClassifierModel:
         self.backward(out)
         self.optimizer.step()
 
-
-##################
-
     def load_network(self, which_epoch):
         """load model from disk"""
         save_filename = '%s_net.pth' % which_epoch
@@ -85,14 +88,13 @@ class ClassifierModel:
         net = self.net
         if isinstance(net, torch.nn.DataParallel):
             net = net.module
-        print('loading the model from %s' % load_path)
+        # print('loading the model from %s' % load_path)
         # PyTorch newer than 0.4 (e.g., built from
         # GitHub source), you can remove str() on self.device
         state_dict = torch.load(load_path, map_location=str(self.device))
         if hasattr(state_dict, '_metadata'):
             del state_dict._metadata
         net.load_state_dict(state_dict)
-
 
     def save_network(self, which_epoch):
         """save model to disk"""

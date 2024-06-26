@@ -2,12 +2,12 @@ from options.test_options import TestOptions
 from data import DataLoader
 from models import create_model
 from util.writer import Writer
-
+import time
 import torch
+from tqdm import tqdm
 
-
-def run_test(epoch=-1):
-    print('Running Test')
+def run_test(epoch=0):
+    start_time = time.time()
     opt = TestOptions().parse()
     opt.serial_batches = True  # no shuffle
     dataset = DataLoader(opt)
@@ -15,7 +15,7 @@ def run_test(epoch=-1):
     writer = Writer(opt)
     # test
     writer.reset_counter()
-    for i, data in enumerate(dataset):
+    for i, data in tqdm(enumerate(dataset)):
         model.set_input(data)
         # print(data['mesh'][0].filename)
         # break
@@ -33,10 +33,10 @@ def run_test(epoch=-1):
 
         # torch.save(out, './features/out_p8_{}.pt'.format(i))
         # torch.save(fc_1, './features/patch_shuffle_8_rotated_20/test_features/{}.pt'.format(a))
-
+    print('Time taken for testing: %f' % (time.time() - start_time))
 
         
-    writer.print_acc(epoch, writer.acc)
+    # writer.print_acc(epoch, writer.acc)
     return writer.acc
 
 
