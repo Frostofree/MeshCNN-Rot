@@ -1,3 +1,4 @@
 *.pyc
 datasets/
 checkpoints/
+data/__pychache__/*
