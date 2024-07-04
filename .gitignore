@@ -1,4 +1,10 @@
 *.pyc
 datasets/
 checkpoints/
+features/
+util/__pychache__/*
+options/__pychache__/*
+models/__pychache__/*
+models/layers/__pychache__/*
 data/__pychache__/*
+*/__pychache__/*
