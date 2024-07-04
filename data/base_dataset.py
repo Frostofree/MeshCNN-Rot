@@ -31,8 +31,6 @@ class BaseDataset(data.Dataset):
             mean, std = np.array(0), np.array(0)
             # n = 0
             for i, data in enumerate(self):
-                if i % 500 == 0:
-                    print('{} of {}'.format(i, self.size))
                 features = data['edge_features']
                 mean = mean + features.mean(axis=1)
                 std = std + features.std(axis=1)

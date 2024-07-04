@@ -1,0 +1,781 @@
+tensorboard X not installed, visualizing wont be available
+------------ Options -------------
+arch: mconvnet
+batch_size: 1
+beta1: 0.9
+checkpoints_dir: ./checkpoints
+continue_part_train: True
+continue_train: False
+dataroot: /media/Data1/siddharth/MCNN-Rot/datasets/M40_heavy
+dataset_mode: classification
+epoch_count: 1
+export_folder: 
+fc_n: 100
+flip_edges: 0.2
+fraction_of_data_per_class: 1.0
+gpu_ids: [0]
+init_gain: 0.02
+init_type: normal
+is_train: True
+lr: 0.0002
+lr_decay_iters: 50
+lr_policy: lambda
+max_dataset_size: inf
+name: M40_heavy_part_train_2
+ncf: [32, 64, 128]
+ninput_edges: 2000
+niter: 100
+niter_decay: 500
+no_vis: False
+norm: group
+num_aug: 20
+num_groups: 16
+num_threads: 3
+part_size: 1000
+phase: train
+pool_res: [1900, 1700, 1500]
+print_freq: 10
+resblocks: 1
+run_test_freq: 1
+save_epoch_freq: 49
+save_latest_freq: 250
+scale_verts: False
+seed: None
+serial_batches: False
+slide_verts: 0.2
+super_epoch: 100
+superepoch_base: 50
+superepoch_decay_max: None
+superepoch_decay_min: None
+verbose_plot: False
+which_epoch: latest
+which_super_epoch: 22
+-------------- End ----------------
+---------- Network initialized -------------
+[Network] Total number of parameters : 1.376 M
+-----------------------------------------------
+Loading the model from ./checkpoints/M40_heavy_part_train_2/super_epoch_22_net.pth
+part_data size: 10
+Dataset Size: 9906
+Super Epoch: 23
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 20.547503
+Super Epoch Time: 8170
+Super Epoch: 23 Done
+learning rate = 0.0002000
+Time taken for testing: 19.359712
+Super Epoch: 24
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 99.958595
+Super Epoch Time: 10506
+Super Epoch: 24 Done
+learning rate = 0.0002000
+Time taken for testing: 98.383033
+Super Epoch: 25
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 67.644186
+Super Epoch Time: 9913
+Super Epoch: 25 Done
+learning rate = 0.0002000
+Time taken for testing: 59.877876
+Super Epoch: 26
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 28.848431
+Super Epoch Time: 8389
+Super Epoch: 26 Done
+learning rate = 0.0002000
+Time taken for testing: 27.372365
+Super Epoch: 27
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 28.552801
+Super Epoch Time: 8481
+Super Epoch: 27 Done
+learning rate = 0.0002000
+Time taken for testing: 28.428160
+Super Epoch: 28
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 26.655945
+Super Epoch Time: 8499
+Super Epoch: 28 Done
+learning rate = 0.0002000
+Time taken for testing: 27.200216
+Super Epoch: 29
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 26.041367
+Super Epoch Time: 8535
+Super Epoch: 29 Done
+learning rate = 0.0002000
+Time taken for testing: 25.209540
+Super Epoch: 30
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 24.374870
+Super Epoch Time: 8488
+Super Epoch: 30 Done
+learning rate = 0.0002000
+Time taken for testing: 23.321043
+Super Epoch: 31
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 23.264966
+Super Epoch Time: 8504
+Super Epoch: 31 Done
+learning rate = 0.0002000
+Time taken for testing: 22.377391
+Super Epoch: 32
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 23.351684
+Super Epoch Time: 8531
+Super Epoch: 32 Done
+learning rate = 0.0002000
+Time taken for testing: 22.118337
+Super Epoch: 33
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 23.101294
+Super Epoch Time: 8452
+Super Epoch: 33 Done
+learning rate = 0.0002000
+Time taken for testing: 21.544859
+Super Epoch: 34
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 35.108426
+Super Epoch Time: 8502
+Super Epoch: 34 Done
+learning rate = 0.0002000
+Time taken for testing: 23.463908
+Super Epoch: 35
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 102.287373
+Super Epoch Time: 11716
+Super Epoch: 35 Done
+learning rate = 0.0002000
+Time taken for testing: 89.573843
+Super Epoch: 36
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 300.467969
+Super Epoch Time: 10893
+Super Epoch: 36 Done
+learning rate = 0.0002000
+Time taken for testing: 211.144012
+Super Epoch: 37
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 217.489631
+Super Epoch Time: 10247
+Super Epoch: 37 Done
+learning rate = 0.0002000
+Time taken for testing: 219.521595
+Super Epoch: 38
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 195.908312
+Super Epoch Time: 10556
+Super Epoch: 38 Done
+learning rate = 0.0002000
+Time taken for testing: 162.306154
+Super Epoch: 39
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 138.701680
+Super Epoch Time: 10039
+Super Epoch: 39 Done
+learning rate = 0.0002000
+Time taken for testing: 166.801392
+Super Epoch: 40
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 111.882311
+Super Epoch Time: 10810
+Super Epoch: 40 Done
+learning rate = 0.0002000
+Time taken for testing: 135.770126
+Super Epoch: 41
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 213.894685
+Super Epoch Time: 11317
+Super Epoch: 41 Done
+learning rate = 0.0002000
+Time taken for testing: 207.276677
+Super Epoch: 42
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 234.367517
+Super Epoch Time: 11215
+Super Epoch: 42 Done
+learning rate = 0.0002000
+Time taken for testing: 229.548030
+Super Epoch: 43
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 258.802894
+Super Epoch Time: 10970
+Super Epoch: 43 Done
+learning rate = 0.0002000
+Time taken for testing: 232.228099
+Super Epoch: 44
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 518.040000
+Super Epoch Time: 10956
+Super Epoch: 44 Done
+learning rate = 0.0002000
+Time taken for testing: 173.938488
+Super Epoch: 45
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 140.058890
+Super Epoch Time: 11334
+Super Epoch: 45 Done
+learning rate = 0.0002000
+Time taken for testing: 152.514497
+Super Epoch: 46
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 199.983151
+Super Epoch Time: 11407
+Super Epoch: 46 Done
+learning rate = 0.0002000
+Time taken for testing: 190.328442
+Super Epoch: 47
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 198.287565
+Super Epoch Time: 11421
+Super Epoch: 47 Done
+learning rate = 0.0002000
+Time taken for testing: 123.691365
+Super Epoch: 48
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 118.473499
+Super Epoch Time: 11238
+Super Epoch: 48 Done
+learning rate = 0.0002000
+Time taken for testing: 113.216206
+Super Epoch: 49
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 38.287911
+Super Epoch Time: 9118
+Super Epoch: 49 Done
+learning rate = 0.0002000
+Time taken for testing: 34.838873
+Super Epoch: 50
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 34.987326
+Super Epoch Time: 8642
+Super Epoch: 50 Done
+learning rate = 0.0002000
+Time taken for testing: 31.032284
+Super Epoch: 51
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 47.532407
+Super Epoch Time: 8559
+Super Epoch: 51 Done
+learning rate = 0.0002000
+Time taken for testing: 42.627431
+Super Epoch: 52
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 56.047098
+Super Epoch Time: 8618
+Super Epoch: 52 Done
+learning rate = 0.0002000
+Time taken for testing: 41.488642
+Super Epoch: 53
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 34.891123
+Super Epoch Time: 8653
+Super Epoch: 53 Done
+learning rate = 0.0002000
+Time taken for testing: 34.487642
+Super Epoch: 54
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 33.060111
+Super Epoch Time: 8644
+Super Epoch: 54 Done
+learning rate = 0.0002000
+Time taken for testing: 32.200083
+Super Epoch: 55
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 131.004561
+Super Epoch Time: 9995
+Super Epoch: 55 Done
+learning rate = 0.0002000
+Time taken for testing: 57.132065
+Super Epoch: 56
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 115.808328
+Super Epoch Time: 10827
+Super Epoch: 56 Done
+learning rate = 0.0002000
+Time taken for testing: 55.519659
+Super Epoch: 57
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 40.925475
+Super Epoch Time: 10665
+Super Epoch: 57 Done
+learning rate = 0.0002000
+Time taken for testing: 37.701632
+Super Epoch: 58
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 52.650796
+Super Epoch Time: 10684
+Super Epoch: 58 Done
+learning rate = 0.0002000
+Time taken for testing: 45.495124
+Super Epoch: 59
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 56.283068
+Super Epoch Time: 10655
+Super Epoch: 59 Done
+learning rate = 0.0002000
+Time taken for testing: 36.742097
+Super Epoch: 60
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 75.719643
+Super Epoch Time: 10733
+Super Epoch: 60 Done
+learning rate = 0.0002000
+Time taken for testing: 68.285166
+Super Epoch: 61
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 60.881165
+Super Epoch Time: 10754
+Super Epoch: 61 Done
+learning rate = 0.0002000
+Time taken for testing: 51.287265
+Super Epoch: 62
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 86.241228
+Super Epoch Time: 10747
+Super Epoch: 62 Done
+learning rate = 0.0002000
+Time taken for testing: 38.189459
+Super Epoch: 63
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 214.286491
+Super Epoch Time: 10951
+Super Epoch: 63 Done
+learning rate = 0.0002000
+Time taken for testing: 110.981267
+Super Epoch: 64
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 342.715418
+Super Epoch Time: 11115
+Super Epoch: 64 Done
+learning rate = 0.0002000
+Time taken for testing: 288.499858
+Super Epoch: 65
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 261.871952
+Super Epoch Time: 10895
+Super Epoch: 65 Done
+learning rate = 0.0002000
+Time taken for testing: 142.390885
+Super Epoch: 66
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 179.241260
+Super Epoch Time: 10846
+Super Epoch: 66 Done
+learning rate = 0.0002000
+Time taken for testing: 56.019150
+Super Epoch: 67
+Part Number: 0
+Part Number: 1
+Part Number: 2
+Part Number: 3
+Part Number: 4
+Part Number: 5
+Part Number: 6
+Part Number: 7
+Part Number: 8
+Part Number: 9
+Time taken for testing: 262.870768
+Super Epoch Time: 10938
+Super Epoch: 67 Done
+learning rate = 0.0002000
+Time taken for testing: 191.095750
+Super Epoch: 68
+Part Number: 0

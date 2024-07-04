@@ -33,13 +33,17 @@ if __name__ == '__main__':
     print('part_data size: %d' % len(part_data))
     print('Dataset Size: %d' % dataset_size)
     writer = Writer(opt)
-    for super_epoch in range(opt.super_epoch):
+    if opt.continue_part_train:
+        start_epoch = int(opt.which_super_epoch) + 1
+    else:
+        start_epoch = 0
+    for super_epoch in range(start_epoch, opt.super_epoch):
         super_epoch_start_time = time.time()
         print('Super Epoch: %d' % super_epoch)
         for part_number, part_part_data in enumerate(part_data):
             print('Part Number: %d' % part_number)
             for miniepoch in tqdm(range(opt.superepoch_base)):
-                print('Mini Epoch: %d' % miniepoch)
+                # print('Mini Epoch: %d' % miniepoch)
                 iter_start_time = time.time()
                 for i, data in enumerate(part_part_data):
                     # print(super_epoch, miniepoch, data['label'], end=' ')

@@ -2,8 +2,8 @@
 
 # run the training
 python part_train.py \
---dataroot /media/Data1/siddharth/MCNN-Rot/datasets/M40_heavy \
---name M40_heavy_part_train_2 \
+--dataroot datasets/M40_sample \
+--name M40_sample_part_train_try \
 --ncf 32 64 128 \
 --pool_res 1900 1700 1500 \
 --ninput_edges 2000 \
@@ -13,8 +13,8 @@ python part_train.py \
 --slide_verts 0.2 \
 --num_aug 20 \
 --super_epoch 100 \
---superepoch_base 50 \
---part_size 1000 \
+--superepoch_base 10 \
+--part_size 10 \
 --save_epoch_freq 49 \
 --continue_part_train \
---which_super_epoch 22 \
+--which_super_epoch 1 \ 

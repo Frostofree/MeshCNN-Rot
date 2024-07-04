@@ -43,6 +43,8 @@ class ClassifierModel:
 
         if not self.is_train or opt.continue_train:
             self.load_network(opt.which_epoch)
+        elif not self.is_train or opt.continue_part_train:
+            self.load_network_super_epoch(opt.which_super_epoch)
 
     def set_input(self, data):
         # input_edge_features = torch.from_numpy(data['edge_features']).float()
@@ -95,7 +97,19 @@ class ClassifierModel:
         if hasattr(state_dict, '_metadata'):
             del state_dict._metadata
         net.load_state_dict(state_dict)
-
+        
+    def load_network_super_epoch(self, which_super_epoch):
+        save_filename = 'super_epoch_%s_net.pth' % which_super_epoch
+        load_path = join(self.save_dir, save_filename)
+        print('Loading the model from %s' % load_path)
+        net = self.net
+        if isinstance(net, torch.nn.DataParallel):
+            net = net.module
+        state_dict = torch.load(load_path, map_location=str(self.device))
+        if hasattr(state_dict, '_metadata'):
+            del state_dict._metadata
+        net.load_state_dict(state_dict)
+            
     def save_network(self, which_epoch):
         """save model to disk"""
         save_filename = '%s_net.pth' % (which_epoch)
