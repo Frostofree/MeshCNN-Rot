@@ -5,13 +5,15 @@ from util.writer import Writer
 import time
 import torch
 from tqdm import tqdm
+from models.mesh_classifier import ClassifierModel
 
 def run_test(epoch=0):
     start_time = time.time()
     opt = TestOptions().parse()
     opt.serial_batches = True  # no shuffle
     dataset = DataLoader(opt)
-    model = create_model(opt)
+    # model = create_model(opt)
+    model = ClassifierModel(opt)
     writer = Writer(opt)
     # test
     writer.reset_counter()
@@ -32,7 +34,7 @@ def run_test(epoch=0):
         # Export out and fc_1 as numpy arrays for further analysis
 
         # torch.save(out, './features/out_p8_{}.pt'.format(i))
-        # torch.save(fc_1, './features/patch_shuffle_8_rotated_20/test_features/{}.pt'.format(a))
+        torch.save(fc_1, './features/M40_heavy_part_train_30/test_features/{}.pt'.format(a))
     print('Time taken for testing: %f' % (time.time() - start_time))
 
         

@@ -5,8 +5,6 @@ from models import create_model
 from util.writer import Writer
 from test import run_test
 
-
-
 if __name__ == '__main__':
     opt = TrainOptions().parse()
     # print("Train Options: succesfully parsed")
